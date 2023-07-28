@@ -51,6 +51,7 @@ struct dmod_crypto
 
 struct dmod_entry
 {
+    u32 symbols_count;
     u64 symbols_entry_offset;
     u64 text_entry_offset;
 } __attribute__((packed));
@@ -73,7 +74,7 @@ struct dmod_header
     u8 reserved[272];
 
     // CHECKSUM
-    u32 header_checksum;
+    u32 checksum;
 } __attribute__((packed));
 
 struct dmod_maker_ctx

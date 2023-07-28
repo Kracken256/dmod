@@ -74,7 +74,7 @@ void dmod_header_final(struct dmod_header *header)
     header->preamble.checksum = dmod_preamble_checksum(header);
     header->metadata.checksum = dmod_metadata_checksum(&header->metadata);
     header->crypto.checksum = dmod_crypto_checksum(&header->crypto);
-    header->header_checksum = dmod_header_checksum(header);
+    header->checksum = dmod_header_checksum(header);
 }
 
 void dmod_add_metadata(dmod_maker_ctx *ctx, std::string key, std::string value)

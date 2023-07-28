@@ -35,6 +35,12 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+    if (arguments.size() == 1 && (contains_arg(arguments, "--version", 0) || contains_arg(arguments, "-v", 0)))
+    {
+        println("dmod-ng v0.0.1");
+        return 0;
+    }
+
     struct dmod_header header;
     u8 aes_key[32];
     memset(aes_key, 0, 32);
@@ -290,9 +296,10 @@ int inspect_mode(const std::vector<std::string> &args)
     }
 
     struct dmod_header header;
-    bool header_valid = false;
+    bool preamble_valid = false;
     bool metadata_valid = false;
     bool crypto_valid = false;
+    bool full_header_valid = false;
 
     if (input_stream.readsome((char *)&header, sizeof(struct dmod_header)) != sizeof(struct dmod_header))
     {
@@ -318,7 +325,7 @@ int inspect_mode(const std::vector<std::string> &args)
     }
     else
     {
-        header_valid = true;
+        preamble_valid = true;
     }
 
     // Check version
@@ -371,13 +378,25 @@ int inspect_mode(const std::vector<std::string> &args)
         crypto_valid = true;
     }
 
+    checksum = dmod_header_checksum(&header);
+    if (checksum != header.checksum)
+    {
+        println("The header checksum is incorrect. The file may be corrupted");
+        std::cout << "Expected checksum = " << std::setw(8) << std::setfill('0') << std::hex << checksum << std::endl;
+        std::cout << "Actual checksum = " << std::setw(8) << std::setfill('0') << std::hex << header.checksum << std::endl;
+    }
+    else
+    {
+        full_header_valid = true;
+    }
+
     println("Module information:");
 
     println("  - Module header:");
     println("    - Module Preamble:");
     println("      - Version: " + to_version(header.preamble.version));
     std::cout << "      - Checksum: " << std::setw(8) << std::setfill('0') << std::hex << header.preamble.checksum << std::endl;
-    println("      - Valid: " + std::string(header_valid ? "Yes" : "No"));
+    println("      - Valid: " + std::string(preamble_valid ? "Yes" : "No"));
     println("      - Bytes: " + to_hexstring((u8 *)&header.preamble, sizeof(struct dmod_preamble), 15));
 
     println("    - Module Metadata:");
@@ -394,19 +413,19 @@ int inspect_mode(const std::vector<std::string> &args)
         switch (header.metadata.flags & DMOD_METADATA_COMPRESS_MASK)
         {
         case DMOD_COMPRESSOR_LZ4:
-            println("        - Algorithm: LZ4");
+            println("        - Compression Method: LZ4");
             break;
         case DMOD_COMPRESSOR_ZSTD:
-            println("        - Algorithm: ZSTD");
+            println("        - Compression Method: ZSTD");
             break;
         case DMOD_COMPRESSOR_LZ4HC:
-            println("        - Algorithm: LZ4HC");
+            println("        - Compression Method: LZ4HC");
             break;
         case DMOD_COMPRESSOR_ZLIB:
-            println("        - Algorithm: ZLIB");
+            println("        - Compression Method: ZLIB");
             break;
         case DMOD_COMPRESSOR_LZMA:
-            println("        - Algorithm: LZMA");
+            println("        - Compression Method: LZMA");
             break;
         case DMOD_COMPRESSOR_NONE:
             if (compressed)
@@ -492,6 +511,31 @@ int inspect_mode(const std::vector<std::string> &args)
     std::cout << "      - Checksum: " << std::setw(8) << std::setfill('0') << std::hex << header.crypto.checksum << std::endl;
     println("      - Valid: " + std::string(crypto_valid ? "Yes" : "No"));
     println("      - Bytes: " + to_hexstring((u8 *)&header.crypto, sizeof(struct dmod_crypto), 15));
+
+    println("  - Module Entry Table:");
+    println("    - Symbol Count: " + std::to_string(header.entry.symbols_count));
+    println("    - Symbol Table Offset: " + std::to_string(header.entry.symbols_entry_offset) + " bytes");
+    println("    - Entry Offset: " + std::to_string(header.entry.text_entry_offset) + " bytes");
+
+    u8 reserve_cmp[sizeof(header.reserved)];
+    memset(reserve_cmp, 0, sizeof(reserve_cmp));
+
+    if (memcmp(header.reserved, reserve_cmp, sizeof(reserve_cmp)) != 0)
+    {
+        println("  - Warning: Reserved bytes are not zeroed");
+
+        println("    - Bytes: " + to_hexstring(header.reserved, sizeof(header.reserved), 13));
+    }
+
+    std::cout << "  - DMOD Header Checksum: " << std::setw(8) << std::setfill('0') << std::hex << header.checksum << std::endl;
+    if (full_header_valid)
+    {
+        println("  - DMOD Header Valid: Yes");
+    }
+    else
+    {
+        println("  - DMOD Header Valid: No");
+    }
 
     return 0;
 }
