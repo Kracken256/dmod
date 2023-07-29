@@ -5,7 +5,6 @@
 #include <map>
 #include <string>
 
-
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -20,7 +19,6 @@ struct dmod_preamble
 
 struct dmod_metadata_item
 {
-    u32 index;
     u16 keysize;
     u16 valuesize;
 
@@ -71,7 +69,7 @@ struct dmod_header
     struct dmod_entry entry;
 
     // EXPANSION
-    u8 reserved[272];
+    u8 reserved[512 - (sizeof(struct dmod_preamble) + sizeof(struct dmod_metadata) + sizeof(struct dmod_crypto) + sizeof(struct dmod_entry) + 4)];
 
     // CHECKSUM
     u32 checksum;
@@ -101,7 +99,8 @@ enum DMOD_CIPHER
     DMOD_CIPHER_CHACHA20 = 0x003,
 };
 
-enum DMOD_COMPRESSOR {
+enum DMOD_COMPRESSOR
+{
     DMOD_COMPRESSOR_NONE = 0,
     DMOD_COMPRESSOR_ZLIB = 0x001,
     DMOD_COMPRESSOR_LZMA = 0x002,
@@ -177,5 +176,3 @@ void dmod_set_key(struct dmod_maker_ctx *ctx, const u8 *key);
 void dmod_set_iv(struct dmod_maker_ctx *ctx, const u8 *iv);
 
 void dmod_set_metadata_flags(struct dmod_maker_ctx *ctx, u16 flags);
-
-

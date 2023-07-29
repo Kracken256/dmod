@@ -82,7 +82,6 @@ void dmod_add_metadata(dmod_maker_ctx *ctx, std::string key, std::string value)
     dmod_metadata_item item;
     item.key = nullptr;
     item.value = nullptr;
-    item.index = ctx->metadata_count;
     item.keysize = key.length();
     item.valuesize = value.length();
     item.key = (u8 *)malloc(item.keysize + 1);
@@ -315,21 +314,20 @@ void dmod_write(dmod_maker_ctx *ctx, std::string path)
             printf("Processing metadata %s : %s\n", ctx->metadata[i].key, ctx->metadata[i].value);
             if (plaintext_buffer == nullptr)
             {
-                plaintext_buffer = (u8 *)malloc(8);
+                plaintext_buffer = (u8 *)malloc(4);
             }
 
-            memcpy(plaintext_buffer + buffer_size, &ctx->metadata[i].index, 4);
-            memcpy(plaintext_buffer + buffer_size + sizeof(u32), &ctx->metadata[i].keysize, 2);
-            memcpy(plaintext_buffer + buffer_size + 6, &ctx->metadata[i].valuesize, 2);
+            memcpy(plaintext_buffer + buffer_size, &ctx->metadata[i].keysize, 2);
+            memcpy(plaintext_buffer + buffer_size + 2, &ctx->metadata[i].valuesize, 2);
 
-            size_t new_buf_size = buffer_size + 8 + ctx->metadata[i].keysize + ctx->metadata[i].valuesize + 8;
+            size_t new_buf_size = buffer_size + 4 + ctx->metadata[i].keysize + ctx->metadata[i].valuesize + 4;
 
             plaintext_buffer = (u8 *)realloc(plaintext_buffer, new_buf_size);
 
-            memcpy(plaintext_buffer + buffer_size + 8, ctx->metadata[i].key, ctx->metadata[i].keysize);
-            memcpy(plaintext_buffer + buffer_size + 8 + ctx->metadata[i].keysize, ctx->metadata[i].value, ctx->metadata[i].valuesize);
+            memcpy(plaintext_buffer + buffer_size + 4, ctx->metadata[i].key, ctx->metadata[i].keysize);
+            memcpy(plaintext_buffer + buffer_size + 4 + ctx->metadata[i].keysize, ctx->metadata[i].value, ctx->metadata[i].valuesize);
 
-            buffer_size += ctx->metadata[i].keysize + ctx->metadata[i].valuesize + 8;
+            buffer_size += ctx->metadata[i].keysize + ctx->metadata[i].valuesize + 4;
         }
 
         u8 *compressed = nullptr;
