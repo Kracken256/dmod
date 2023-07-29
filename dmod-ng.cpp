@@ -26,6 +26,7 @@ enum OpMode
     Verify,
     Help,
     Version,
+
 };
 
 struct param_block
@@ -83,22 +84,22 @@ int main(int argc, char *argv[])
 
     // Test add metadata
     dmod_add_metadata(ctx, "author.email", 12, "wesjones2004@gmail.com", 22);
-    // dmod_add_metadata(ctx, "author.name", "Wesley Jones");
-    // dmod_add_metadata(ctx, "author.website", "https://wesjones2004.github.io");
-    // dmod_add_metadata(ctx, "software.version", "0.0.1");
-    // dmod_add_metadata(ctx, "software.name", "dmod");
-    // dmod_add_metadata(ctx, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d", "non-printable");
-    // dmod_add_metadata(ctx, "software.description", "A module format for myself");
-    // dmod_add_metadata(ctx, "software.license", "Proprietary");
+    dmod_add_metadata(ctx, "author.name", 11, "Wesley Jones", 12);
+    dmod_add_metadata(ctx, "author.website", 14, "https://wesjones2004.github.io", 30);
+    dmod_add_metadata(ctx, "software.version", 16, "0.0.1", 5);
+    dmod_add_metadata(ctx, "software.name", 13, "dmod", 4);
+    dmod_add_metadata(ctx, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d", 14, "non-printable", 13);
+    dmod_add_metadata(ctx, "software.description", 20, "A module format for myself", 26);
+    dmod_add_metadata(ctx, "software.license", 16, "Proprietary", 11);
 
     dmod_header_final(ctx->header);
 
-    dmod_write(ctx, "module.dmod");
+    // dmod_write(ctx, "module.dmod");
 
     dmod_ctx_free(ctx);
 
-    println();
-    println();
+    // println();
+    // println();
 
     param_block mode = parse_get_mode(arguments);
 
@@ -160,73 +161,71 @@ param_block parse_get_mode(const std::vector<std::string> &args)
         return params;
     }
 
-    for (char c : mblock)
+    if (mblock.front() != '-')
     {
-        switch (c)
+
+        for (char c : mblock)
         {
-        case 'i':
-            if (params.mode != OpMode::None && params.mode != OpMode::Inspect)
+            switch (c)
             {
-                println("Multiple modes specified. Can not use 'i' with other modes.");
-                params.should_exit = true;
-                return params;
+            case 'i':
+                if (params.mode != OpMode::None && params.mode != OpMode::Inspect)
+                {
+                    println("Multiple modes specified. Can not use 'i' with other modes.");
+                    params.should_exit = true;
+                    return params;
+                }
+                params.mode = OpMode::Inspect;
+                break;
+            case 'c':
+                if (params.mode != OpMode::None && params.mode != OpMode::Pack)
+                {
+                    println("Multiple modes specified. Can not use 'c' with other modes.");
+                    params.should_exit = true;
+                    return params;
+                }
+                params.mode = OpMode::Pack;
+                break;
+            case 'x':
+                if (params.mode != OpMode::None && params.mode != OpMode::Unpack)
+                {
+                    println("Multiple modes specified. Can not use 'x' with other modes.");
+                    params.should_exit = true;
+                    return params;
+                }
+                params.mode = OpMode::Unpack;
+                break;
+            case 'e':
+                if (params.mode != OpMode::None && params.mode != OpMode::Encrypt)
+                {
+                    println("Multiple modes specified. Can not use 'e' with other modes.");
+                    params.should_exit = true;
+                    return params;
+                }
+                params.mode = OpMode::Encrypt;
+                break;
+            case 's':
+                if (params.mode != OpMode::None && params.mode != OpMode::Sign)
+                {
+                    println("Multiple modes specified. Can not use 's' with other modes.");
+                    params.should_exit = true;
+                    return params;
+                }
+                params.mode = OpMode::Sign;
+                break;
+            case 'v':
+                if (params.mode != OpMode::None && params.mode != OpMode::Verify)
+                {
+                    println("Multiple modes specified. Can not use 'v' with other modes.");
+                    params.should_exit = true;
+                    return params;
+                }
+                params.mode = OpMode::Verify;
+                break;
+            case 'l':
+                params.list_metadata = true;
+                break;
             }
-            params.mode = OpMode::Inspect;
-            break;
-        case 'c':
-            if (params.mode != OpMode::None && params.mode != OpMode::Pack)
-            {
-                println("Multiple modes specified. Can not use 'c' with other modes.");
-                params.should_exit = true;
-                return params;
-            }
-            params.mode = OpMode::Pack;
-            break;
-        case 'x':
-            if (params.mode != OpMode::None && params.mode != OpMode::Unpack)
-            {
-                println("Multiple modes specified. Can not use 'x' with other modes.");
-                params.should_exit = true;
-                return params;
-            }
-            params.mode = OpMode::Unpack;
-            break;
-        case 'e':
-            if (params.mode != OpMode::None && params.mode != OpMode::Encrypt)
-            {
-                println("Multiple modes specified. Can not use 'e' with other modes.");
-                params.should_exit = true;
-                return params;
-            }
-            params.mode = OpMode::Encrypt;
-            break;
-        case 's':
-            if (params.mode != OpMode::None && params.mode != OpMode::Sign)
-
-            {
-                println("Multiple modes specified. Can not use 's' with other modes.");
-                params.should_exit = true;
-                return params;
-            }
-            params.mode = OpMode::Sign;
-            break;
-        case 'v':
-            if (params.mode != OpMode::None && params.mode != OpMode::Verify)
-            {
-                println("Multiple modes specified. Can not use 'v' with other modes.");
-                params.should_exit = true;
-                return params;
-            }
-            params.mode = OpMode::Verify;
-            break;
-        case 'l':
-            params.list_metadata = true;
-            break;
-
-        default:
-            println("Unknown mode '" + std::string(1, c) + "'");
-            params.should_exit = true;
-            break;
         }
     }
 
@@ -794,7 +793,7 @@ int print_metadata(const std::string &dmod_file)
     size_t content_length = header.metadata.length;
     println("Metadata:");
     std::cout << "  - Metadata offset: " << header.metadata.offset << std::endl;
-    std::cout << "  - Total bytes: " << std::dec << content_length << std::endl;
+    std::cout << "  - Size: " << std::dec << content_length << " bytes" << std::endl;
     std::cout << "  - Item count: " << std::dec << header.metadata.count << std::endl;
 
     std::map<std::string, std::string> metadata;
@@ -808,16 +807,14 @@ int print_metadata(const std::string &dmod_file)
 
     if (header.metadata.flags & DMOD_METADATA_ENCRYPT)
     {
-        // std::string password = get_password("Enter password to view metadata: ");
-
-        std::string password = "1234";
+        std::string password = get_password("Enter password to view metadata: ");
 
         uint8_t enc_key[32];
         dmod_derive_key((const uint8_t *)password.c_str(), password.length(), enc_key);
 
         if (dmod_verify_password(&header, enc_key, 32) != 0)
         {
-            println("Error: Invalid password");
+            println("Error: The password is incorrect");
             return 1;
         }
 
@@ -828,6 +825,30 @@ int print_metadata(const std::string &dmod_file)
         delete[] contents;
 
         contents = plaintext;
+
+        uint8_t digest_metadata[32];
+        if ((file.readsome((char *)digest_metadata, sizeof(digest_metadata)) != sizeof(digest_metadata)))
+        {
+            println("Error: Failed to read metadata digest");
+            return 1;
+        }
+
+        uint8_t digest_enc[32];
+        uint8_t digest[32];
+        dmod_hash(contents, content_length, digest_enc);
+
+        dmod_decrypt(digest_enc, digest, 32, enc_key, header.crypto.iv, (DMOD_CIPHER)header.crypto.sym_cipher_algo);
+
+        if (memcmp(digest, digest_metadata, sizeof(digest)) != 0)
+        {
+            println();
+            println("[ ERROR ] : Metadata digest does not match!!");
+            println("            The metadata ciphertext has been");
+            println("            tampered with, or the file is corrupted.");
+            println();
+            println("There is a 0.0000059604644775390625 % probability that the password validated but is incorrect.");
+            return 1;
+        }
     }
 
     if (header.metadata.flags & DMOD_METADATA_COMPRESS_MASK)
@@ -845,6 +866,8 @@ int print_metadata(const std::string &dmod_file)
         contents = decompressed;
         content_length = decompressed_size;
     }
+
+    file.close();
 
     size_t pos = 0;
 
@@ -865,6 +888,8 @@ int print_metadata(const std::string &dmod_file)
     } while (pos < content_length);
 
     delete[] contents;
+
+    println("  - Metadata items:");
 
     for (auto &it : metadata)
     {
@@ -950,15 +975,11 @@ std::string get_password(std::string prompt)
 
     std::cout << std::endl;
 #else
-    struct termios tty;
-    tcgetattr(STDIN_FILENO, &tty);
 
-    std::cout << prompt;
-    std::getline(std::cin, password);
+    char *pass = getpass(prompt.c_str());
+    password = pass;
+    free(pass);
 
-    tcsetattr(STDIN_FILENO, TCSANOW, &tty);
-
-    std::cout << std::endl;
 #endif
 
     return password;

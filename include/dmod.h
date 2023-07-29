@@ -39,7 +39,7 @@ extern "C"
         uint32_t magic;
         uint16_t sym_cipher_algo;
         uint16_t digest_algo;
-        uint8_t password_checksum[6];
+        uint8_t password_checksum[3];
         uint8_t iv[16];
         uint8_t digital_signature[64];
         uint8_t public_key[32];
@@ -262,6 +262,13 @@ extern "C"
     /// @param len Length of the password
     /// @param outkey Pointer to store the derived 32 byte key
     void dmod_derive_key(const uint8_t *password, size_t len, uint8_t *outkey);
+
+
+    /// @brief DMOD standard hash function
+    /// @param in Input buffer
+    /// @param len Length of the input buffer
+    /// @param out 32 byte output buffer
+    void dmod_hash(const void *in, size_t len, uint8_t *out);
 
 #ifdef __cplusplus
 }

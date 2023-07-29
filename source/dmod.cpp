@@ -349,6 +349,13 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
         if (ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)
             printf("Compressed metadata from %lu to %lu\n", buffer_size, compressed_size);
 
+        // Calc the sha256 hash of the metadata
+        uint8_t digest[32];
+        dmod_hash(compressed, compressed_size, digest);
+
+        uint8_t hash_enc[32];
+        dmod_encrypt(digest, hash_enc, 32, ctx->enc_key, ctx->header->crypto.iv, (DMOD_CIPHER)ctx->header->crypto.sym_cipher_algo);
+
         uint8_t *ciphertext = (uint8_t *)malloc(compressed_size);
 
         printf("Encrypting metadata...\n");
@@ -357,9 +364,10 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
             printf("Failed to encrypt metadata\n");
             exit(1);
         }
-
+        
         printf("Writing metadata to %u\n", ctx->metadata_offset);
         fwrite(ciphertext, compressed_size, 1, outfile);
+        fwrite(hash_enc, 32, 1, outfile);
 
         printf("DMOD file created. SUCCESS.\n");
         free(plaintext_buffer);
@@ -432,14 +440,7 @@ void dmod_set_key(dmod_maker_ctx *ctx, const uint8_t *key)
     // Checksum
     uint8_t digest[32];
 
-    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-
-    const EVP_MD *md = EVP_md5();
-
-    EVP_DigestInit_ex(mdctx, md, NULL);
-    EVP_DigestUpdate(mdctx, key, 32);
-    EVP_DigestFinal_ex(mdctx, digest, NULL);
-    EVP_MD_CTX_free(mdctx);
+    dmod_hash(key, sizeof(ctx->enc_key), digest);
 
     memcpy(ctx->header->crypto.password_checksum, digest, sizeof(ctx->header->crypto.password_checksum));
 }
@@ -456,7 +457,6 @@ void dmod_set_metadata_flags(dmod_maker_ctx *ctx, uint16_t flags)
 
 int dmod_lib_init()
 {
-    SSL_library_init();
     OpenSSL_add_all_algorithms();
 
     return 0;
@@ -466,28 +466,14 @@ int dmod_verify_password(const dmod_header *header, const uint8_t *key, size_t k
 {
     uint8_t digest[32];
 
-    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-
-    const EVP_MD *md = EVP_md5();
-
-    EVP_DigestInit_ex(mdctx, md, NULL);
-    EVP_DigestUpdate(mdctx, key, key_size);
-    EVP_DigestFinal_ex(mdctx, digest, NULL);
-    EVP_MD_CTX_free(mdctx);
+    dmod_hash(key, key_size, digest);
 
     return memcmp(digest, header->crypto.password_checksum, sizeof(header->crypto.password_checksum)) != 0;
 }
 
 void dmod_derive_key(const uint8_t *password, size_t len, uint8_t *outkey)
 {
-    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
-
-    const EVP_MD *md = EVP_sha256();
-
-    EVP_DigestInit_ex(mdctx, md, NULL);
-    EVP_DigestUpdate(mdctx, password, len);
-    EVP_DigestFinal_ex(mdctx, outkey, NULL);
-    EVP_MD_CTX_free(mdctx);
+    dmod_hash(password, len, outkey);
 }
 
 int dmod_verify_header(const dmod_header *header)
@@ -546,4 +532,16 @@ int dmod_verify_header(const dmod_header *header)
     }
 
     return 0;
+}
+
+void dmod_hash(const void *in, size_t len, uint8_t *out)
+{
+    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+
+    const EVP_MD *md = EVP_sha256();
+
+    EVP_DigestInit_ex(mdctx, md, NULL);
+    EVP_DigestUpdate(mdctx, in, len);
+    EVP_DigestFinal_ex(mdctx, out, NULL);
+    EVP_MD_CTX_free(mdctx);
 }
