@@ -1,4 +1,4 @@
-#include <dmod.hpp>
+#include <dmod.h>
 #include <string.h>
 #include <vector>
 #include <string>
@@ -6,6 +6,14 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <openssl/evp.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#elif __linux__
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 enum OpMode
 {
@@ -47,48 +55,50 @@ int decompress_mode(const std::vector<std::string> &args);
 
 int print_metadata(const std::string &dmod_file);
 
+bool verify_dmod_file(const std::string &dmod_file);
+
+std::string get_password(std::string prompt);
+
 int main(int argc, char *argv[])
 {
     std::vector<std::string> arguments = std::vector<std::string>(argv + 1, argv + argc);
 
-    // struct dmod_header header;
-    // u8 aes_key[32];
-    // memset(aes_key, 0, 32);
+    uint8_t enc_key[32];
 
-    // u8 ivkey[16];
-    // memset(ivkey, 0, 16);
+    uint8_t ivkey[16];
+    memset(ivkey, 0xac, 16);
 
-    // dmod_header_init(&header);
+    struct dmod_maker_ctx *ctx = dmod_ctx_new();
 
-    // struct dmod_maker_ctx ctx;
+    char password[] = "1234";
 
-    // dmod_ctx_init(&ctx);
-    // ctx.header = &header;
+    dmod_derive_key((uint8_t *)password, 4, enc_key);
 
-    // dmod_set_cipher(&ctx, DMOD_CIPHER_AES_256_CTR);
-    // dmod_set_key(&ctx, aes_key);
-    // dmod_set_iv(&ctx, ivkey);
+    dmod_set_cipher(ctx, DMOD_CIPHER_AES_256_CTR);
+    dmod_set_key(ctx, enc_key);
+    dmod_set_iv(ctx, ivkey);
 
-    // // Set compress
-    // dmod_set_metadata_flags(&ctx, DMOD_COMPRESSOR_ZLIB);
+    // Set compress
+    dmod_set_metadata_flags(ctx, DMOD_COMPRESSOR_ZLIB);
 
-    // // Test add metadata
-    // dmod_add_metadata(&ctx, "author.email", "wesjones2004@gmail.com");
-    // dmod_add_metadata(&ctx, "author.name", "Wesley Jones");
-    // dmod_add_metadata(&ctx, "author.website", "https://wesjones2004.github.io");
-    // dmod_add_metadata(&ctx, "software.version", "0.0.1");
-    // dmod_add_metadata(&ctx, "software.name", "dmod");
-    // dmod_add_metadata(&ctx, "software.description", "A module format for myself");
-    // dmod_add_metadata(&ctx, "software.license", "Proprietary");
+    // Test add metadata
+    dmod_add_metadata(ctx, "author.email", 12, "wesjones2004@gmail.com", 22);
+    // dmod_add_metadata(ctx, "author.name", "Wesley Jones");
+    // dmod_add_metadata(ctx, "author.website", "https://wesjones2004.github.io");
+    // dmod_add_metadata(ctx, "software.version", "0.0.1");
+    // dmod_add_metadata(ctx, "software.name", "dmod");
+    // dmod_add_metadata(ctx, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d", "non-printable");
+    // dmod_add_metadata(ctx, "software.description", "A module format for myself");
+    // dmod_add_metadata(ctx, "software.license", "Proprietary");
 
-    // dmod_header_final(ctx.header);
+    dmod_header_final(ctx->header);
 
-    // dmod_write(&ctx, "module.dmod");
+    dmod_write(ctx, "module.dmod");
 
-    // dmod_ctx_free(&ctx);
+    dmod_ctx_free(ctx);
 
-    // println();
-    // println();
+    println();
+    println();
 
     param_block mode = parse_get_mode(arguments);
 
@@ -119,6 +129,12 @@ int main(int argc, char *argv[])
         }
 
         return res || pres;
+    }
+
+    if (mode.list_metadata)
+    {
+        int res = print_metadata(mode.dmod_file_in);
+        return res;
     }
 
     return 0;
@@ -224,12 +240,6 @@ param_block parse_get_mode(const std::vector<std::string> &args)
         params.mode = OpMode::Version;
     }
 
-    if (params.mode == None)
-    {
-        params.mode = OpMode::Help;
-        return params;
-    }
-
     // Check correct modes
 
     if (params.mode == OpMode::Inspect)
@@ -253,7 +263,28 @@ param_block parse_get_mode(const std::vector<std::string> &args)
         return params;
     }
 
-    if (params.mode == None)
+    if (params.list_metadata)
+    {
+        if (args.size() < 2)
+        {
+            println("Missing input file. Usage: dmod-ng l <file>");
+            params.should_exit = true;
+            return params;
+        }
+
+        if (!std::filesystem::exists(args[1]))
+        {
+            println("The file '" + args[1] + "' does not exist");
+            params.should_exit = true;
+            return params;
+        }
+
+        params.dmod_file_in = args[1];
+
+        return params;
+    }
+
+    if (params.mode == None && !params.list_metadata)
     {
         params.mode = OpMode::Help;
         return params;
@@ -341,7 +372,7 @@ void println(std::string msg)
     std::cout << msg << std::endl;
 }
 
-std::string to_version(u16 num)
+std::string to_version(uint16_t num)
 {
     std::string result;
     switch (num)
@@ -365,7 +396,7 @@ std::string to_version(u16 num)
     return result;
 }
 
-std::string to_symmetric_algorithm(u16 num)
+std::string to_symmetric_algorithm(uint16_t num)
 {
     std::string result;
 
@@ -391,7 +422,7 @@ std::string to_symmetric_algorithm(u16 num)
     return result;
 }
 
-std::string to_digest_algorithm(u16 num)
+std::string to_digest_algorithm(uint16_t num)
 {
     std::string result;
 
@@ -414,7 +445,7 @@ std::string to_digest_algorithm(u16 num)
     return result;
 }
 
-std::string to_hexstring(const u8 *bytes, size_t len, size_t indent = 0)
+std::string to_hexstring(const uint8_t *bytes, size_t len, size_t indent = 0)
 {
     std::stringstream ss;
     for (int i = 0; i < len; i++)
@@ -436,9 +467,34 @@ std::string to_hexstring(const u8 *bytes, size_t len, size_t indent = 0)
     return ss.str();
 }
 
+bool verify_dmod_file(const std::string &dmod_file)
+{
+    if (!std::filesystem::exists(dmod_file))
+    {
+        return false;
+    }
+
+    std::ifstream input_stream(dmod_file, std::ios::binary);
+
+    if (!input_stream.is_open())
+    {
+        return false;
+    }
+
+    struct dmod_header header;
+
+    if (input_stream.readsome((char *)&header, sizeof(struct dmod_header)) != sizeof(struct dmod_header))
+    {
+        return false;
+    }
+
+    input_stream.close();
+
+    return dmod_verify_header(&header) == 0;
+}
+
 int inspect_mode(const std::string &dmod_file)
 {
-
     if (!std::filesystem::exists(dmod_file))
     {
         println("Input file does not exist");
@@ -477,7 +533,7 @@ int inspect_mode(const std::string &dmod_file)
     }
 
     // Checksum on header preamble
-    u64 checksum = dmod_preamble_checksum((dmod_header *)&header.preamble);
+    uint64_t checksum = dmod_preamble_checksum(&header.preamble);
     if (checksum != header.preamble.checksum)
     {
         println("The checksum is incorrect. The file may be corrupted");
@@ -574,11 +630,12 @@ int inspect_mode(const std::string &dmod_file)
     println("      - Version: " + to_version(header.preamble.version));
     std::cout << "      - Checksum: " << std::setw(8) << std::setfill('0') << std::hex << header.preamble.checksum << std::endl;
     println("      - Valid: " + std::string(preamble_valid ? "Yes" : "No"));
-    println("      - Bytes: " + to_hexstring((u8 *)&header.preamble, sizeof(struct dmod_preamble), 15));
+    println("      - Bytes: " + to_hexstring((uint8_t *)&header.preamble, sizeof(struct dmod_preamble), 15));
 
     println("    - Module metadata:");
-    println("      - Metadata items: " + std::to_string(header.metadata.length));
+    println("      - Metadata items: " + std::to_string(header.metadata.count));
     println("      - Offset: " + std::to_string(header.metadata.offset) + " bytes");
+    println("      - Size: " + std::to_string(header.metadata.length) + " bytes");
     println("      - Flags:");
 
     // Check flags
@@ -636,27 +693,20 @@ int inspect_mode(const std::string &dmod_file)
 
     std::cout << "      - Checksum: " << std::setw(8) << std::setfill('0') << std::hex << header.metadata.checksum << std::endl;
     println("      - Valid: " + std::string(metadata_valid ? "Yes" : "No"));
-    println("      - Bytes: " + to_hexstring((u8 *)&header.metadata, sizeof(struct dmod_metadata), 15));
+    println("      - Bytes: " + to_hexstring((uint8_t *)&header.metadata, sizeof(struct dmod_metadata), 15));
 
     println("    - Module crypto settings:");
     println("      - Symmetric algorithm: " + to_symmetric_algorithm(header.crypto.sym_cipher_algo));
     println("      - Digest algorithm: " + to_digest_algorithm(header.crypto.digest_algo));
 
-    u8 cipher_data_cmp[sizeof(header.crypto.cipher_data)];
-    u8 digital_signature_cmp[sizeof(header.crypto.digital_signature)];
-    u8 public_key_cmp[sizeof(header.crypto.public_key)];
-    memset(cipher_data_cmp, 0, sizeof(cipher_data_cmp));
+    uint8_t digital_signature_cmp[sizeof(header.crypto.digital_signature)];
+    uint8_t public_key_cmp[sizeof(header.crypto.public_key)];
     memset(digital_signature_cmp, 0, sizeof(digital_signature_cmp));
     memset(public_key_cmp, 0, sizeof(public_key_cmp));
 
-    if (memcmp(header.crypto.cipher_data, cipher_data_cmp, sizeof(cipher_data_cmp)) == 0)
-    {
-        println("      - Cipher data: None");
-    }
-    else
-    {
-        println("      - Cipher data: " + to_hexstring(header.crypto.cipher_data, sizeof(header.crypto.cipher_data), 21));
-    }
+    println("      - Password checksum: " + to_hexstring(header.crypto.password_checksum, sizeof(header.crypto.password_checksum), 23));
+
+    println("      - IV: " + to_hexstring(header.crypto.iv, sizeof(header.crypto.iv), 12));
 
     if (memcmp(header.crypto.digital_signature, digital_signature_cmp, sizeof(digital_signature_cmp)) == 0)
     {
@@ -687,14 +737,14 @@ int inspect_mode(const std::string &dmod_file)
 
     std::cout << "      - Checksum: " << std::setw(8) << std::setfill('0') << std::hex << header.crypto.checksum << std::endl;
     println("      - Valid: " + std::string(crypto_valid ? "Yes" : "No"));
-    println("      - Bytes: " + to_hexstring((u8 *)&header.crypto, sizeof(struct dmod_crypto), 15));
+    println("      - Bytes: " + to_hexstring((uint8_t *)&header.crypto, sizeof(struct dmod_crypto), 15));
 
     println("  - Module entry table:");
     println("    - Symbol count: " + std::to_string(header.entry.symbols_count));
     println("    - Symbol table offset: " + std::to_string(header.entry.symbols_entry_offset) + " bytes");
     println("    - Entry offset: " + std::to_string(header.entry.text_entry_offset) + " bytes");
 
-    u8 reserve_cmp[sizeof(header.reserved)];
+    uint8_t reserve_cmp[sizeof(header.reserved)];
     memset(reserve_cmp, 0, sizeof(reserve_cmp));
 
     if (memcmp(header.reserved, reserve_cmp, sizeof(reserve_cmp)) != 0)
@@ -719,6 +769,155 @@ int inspect_mode(const std::string &dmod_file)
 
 int print_metadata(const std::string &dmod_file)
 {
+    if (!verify_dmod_file(dmod_file))
+    {
+        println("Error: Invalid DMOD file");
+        return 1;
+    }
+
+    std::ifstream file(dmod_file, std::ios::binary);
+
+    if (!file.is_open())
+    {
+        println("Error: Failed to open file");
+        return 1;
+    }
+
+    struct dmod_header header;
+    if ((file.readsome((char *)&header, sizeof(struct dmod_header)) != sizeof(struct dmod_header)))
+    {
+        println("Error: Failed to read DMOD header");
+        return 1;
+    }
+
+    file.seekg(header.metadata.offset, std::ios::beg);
+    size_t content_length = header.metadata.length;
+    println("Metadata:");
+    std::cout << "  - Metadata offset: " << header.metadata.offset << std::endl;
+    std::cout << "  - Total bytes: " << std::dec << content_length << std::endl;
+    std::cout << "  - Item count: " << std::dec << header.metadata.count << std::endl;
+
+    std::map<std::string, std::string> metadata;
+    uint8_t *contents = new uint8_t[content_length];
+
+    if (file.readsome((char *)contents, content_length) != content_length)
+    {
+        println("Error: Failed to read metadata");
+        return 1;
+    }
+
+    if (header.metadata.flags & DMOD_METADATA_ENCRYPT)
+    {
+        // std::string password = get_password("Enter password to view metadata: ");
+
+        std::string password = "1234";
+
+        uint8_t enc_key[32];
+        dmod_derive_key((const uint8_t *)password.c_str(), password.length(), enc_key);
+
+        if (dmod_verify_password(&header, enc_key, 32) != 0)
+        {
+            println("Error: Invalid password");
+            return 1;
+        }
+
+        uint8_t *plaintext = new uint8_t[content_length];
+
+        dmod_decrypt(contents, plaintext, content_length, enc_key, header.crypto.iv, (DMOD_CIPHER)header.crypto.sym_cipher_algo);
+
+        delete[] contents;
+
+        contents = plaintext;
+    }
+
+    if (header.metadata.flags & DMOD_METADATA_COMPRESS_MASK)
+    {
+        uint8_t *decompressed;
+        size_t decompressed_size;
+        if (xpress_buffer(contents, &decompressed, content_length, &decompressed_size, 1, (DMOD_COMPRESSOR)(header.metadata.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
+        {
+            println("Error: Failed to decompress metadata");
+            return 1;
+        }
+
+        delete[] contents;
+
+        contents = decompressed;
+        content_length = decompressed_size;
+    }
+
+    size_t pos = 0;
+
+    do
+    {
+        uint16_t key_len = *(uint16_t *)&contents[pos];
+        pos += sizeof(uint16_t);
+        uint16_t val_len = *(uint16_t *)&contents[pos];
+        pos += sizeof(uint16_t);
+
+        std::string key((char *)&contents[pos], key_len);
+        pos += key_len;
+        std::string val((char *)&contents[pos], val_len);
+        pos += val_len;
+
+        metadata[key] = val;
+
+    } while (pos < content_length);
+
+    delete[] contents;
+
+    for (auto &it : metadata)
+    {
+        if (it.first.length() > 4096 || it.second.length() > 4096)
+        {
+            println("Not printing metadata because it is too large");
+            continue;
+        }
+
+        // Check if key or value is binary (non-printable)
+
+        bool key_is_binary = false;
+        bool val_is_binary = false;
+
+        for (size_t i = 0; i < it.first.length(); i++)
+        {
+            if (!isprint(it.first[i]))
+            {
+                key_is_binary = true;
+                break;
+            }
+        }
+
+        for (size_t i = 0; i < it.second.length(); i++)
+        {
+            if (!isprint(it.second[i]))
+            {
+                val_is_binary = true;
+                break;
+            }
+        }
+
+        if (!key_is_binary && val_is_binary)
+        {
+            println("    - \"" + it.first + "\": (binary data)");
+            continue;
+        }
+
+        if (key_is_binary && !val_is_binary)
+        {
+            println("    - (binary data): \"" + it.second + "\"");
+            continue;
+        }
+
+        if (key_is_binary && val_is_binary)
+        {
+            println("    - (binary data): (binary data)");
+            continue;
+        }
+
+        println("    - \"" + it.first + "\": \"" + it.second + "\"");
+    }
+
     return 0;
 }
 
@@ -730,4 +929,37 @@ int compress_mode(const std::vector<std::string> &args)
 int decompress_mode(const std::vector<std::string> &args)
 {
     return 0;
+}
+
+std::string get_password(std::string prompt)
+{
+    // Hide password input cross-platform
+
+    std::string password;
+
+#ifdef _WIN32
+    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    GetConsoleMode(hStdin, &mode);
+    SetConsoleMode(hStdin, mode & (~ENABLE_ECHO_INPUT));
+
+    std::cout << prompt;
+    std::getline(std::cin, password);
+
+    SetConsoleMode(hStdin, mode);
+
+    std::cout << std::endl;
+#else
+    struct termios tty;
+    tcgetattr(STDIN_FILENO, &tty);
+
+    std::cout << prompt;
+    std::getline(std::cin, password);
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &tty);
+
+    std::cout << std::endl;
+#endif
+
+    return password;
 }

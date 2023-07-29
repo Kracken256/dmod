@@ -1,4 +1,4 @@
-#include <dmod.hpp>
+#include <dmod.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -9,9 +9,9 @@
 #include <openssl/ssl.h>
 #include <zlib.h>
 
-u32 dmod_check32(const void *data, u32 n_bytes)
+static uint32_t dmod_check32(const void *data, uint32_t n_bytes)
 {
-    u8 digest[16];
+    uint8_t digest[16];
 
     EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
 
@@ -22,25 +22,25 @@ u32 dmod_check32(const void *data, u32 n_bytes)
     EVP_DigestFinal_ex(mdctx, digest, NULL);
     EVP_MD_CTX_free(mdctx);
 
-    return *(u32 *)digest;
+    return *(uint32_t *)digest;
 }
 
-u32 dmod_preamble_checksum(const struct dmod_header *header)
+uint32_t dmod_preamble_checksum(const struct dmod_preamble *header)
 {
-    return dmod_check32(&header->preamble, DMOD_PREAMBLE_SIZE - 4);
+    return dmod_check32(header, DMOD_PREAMBLE_SIZE - 4);
 }
 
-u32 dmod_metadata_checksum(const struct dmod_metadata *data)
+uint32_t dmod_metadata_checksum(const struct dmod_metadata *data)
 {
     return dmod_check32(data, DMOD_METADATA_SIZE - 4);
 }
 
-u32 dmod_crypto_checksum(const struct dmod_crypto *data)
+uint32_t dmod_crypto_checksum(const struct dmod_crypto *data)
 {
     return dmod_check32(data, DMOD_CRYPTO_SIZE - 4);
 }
 
-u32 dmod_header_checksum(const struct dmod_header *header)
+uint32_t dmod_header_checksum(const struct dmod_header *header)
 {
     return dmod_check32(header, DMOD_HEADER_SIZE - 4);
 }
@@ -52,16 +52,18 @@ void dmod_header_init(struct dmod_header *header)
 
     header->metadata.magic = DMOD_METADATA_MAGIC;
     header->metadata.flags = 0;
-    header->metadata.length = 0;
+    header->metadata.count = 0;
     header->metadata.offset = 0;
+    header->metadata.length = 0;
 
     header->crypto.magic = DMOD_CRYPTO_MAGIC;
     header->crypto.sym_cipher_algo = DMOD_SYM_CIPHER_ALGO_NONE;
     header->crypto.digest_algo = DMOD_DIGEST_ALGO_NONE;
     header->crypto.x509_certificate_offset = 0;
-    memset(header->crypto.cipher_data, 0, sizeof(header->crypto.cipher_data));
+    memset(header->crypto.iv, 0, sizeof(header->crypto.iv));
     memset(header->crypto.digital_signature, 0, sizeof(header->crypto.digital_signature));
     memset(header->crypto.public_key, 0, sizeof(header->crypto.public_key));
+    memset(header->crypto.password_checksum, 0, sizeof(header->crypto.password_checksum));
 
     header->entry.symbols_entry_offset = 0;
     header->entry.text_entry_offset = 0;
@@ -71,90 +73,180 @@ void dmod_header_init(struct dmod_header *header)
 
 void dmod_header_final(struct dmod_header *header)
 {
-    header->preamble.checksum = dmod_preamble_checksum(header);
+    header->preamble.checksum = dmod_preamble_checksum(&header->preamble);
     header->metadata.checksum = dmod_metadata_checksum(&header->metadata);
     header->crypto.checksum = dmod_crypto_checksum(&header->crypto);
     header->checksum = dmod_header_checksum(header);
 }
 
-void dmod_add_metadata(dmod_maker_ctx *ctx, std::string key, std::string value)
+int dmod_add_metadata(dmod_maker_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size)
 {
     dmod_metadata_item item;
     item.key = nullptr;
     item.value = nullptr;
-    item.keysize = key.length();
-    item.valuesize = value.length();
-    item.key = (u8 *)malloc(item.keysize + 1);
-    item.value = (u8 *)malloc(item.valuesize + 1);
-    memcpy(item.key, key.c_str(), item.keysize);
-    memcpy(item.value, value.c_str(), item.valuesize);
-    item.key[item.keysize] = 0;
-    item.value[item.valuesize] = 0;
-    ctx->metadata.push_back(item);
+    item.keysize = key_size;
+    item.valuesize = value_size;
+    item.key = (uint8_t *)malloc(key_size);
+    item.value = (uint8_t *)malloc(value_size);
+    memcpy(item.key, key, key_size);
+    memcpy(item.value, value, value_size);
     ctx->metadata_count++;
+
+    ctx->metadata_list = (dmod_metadata_item *)realloc(ctx->metadata_list, ctx->metadata_count * sizeof(dmod_metadata_item));
+    ctx->metadata_list[ctx->metadata_count - 1] = item;
 
     if (ctx->header->metadata.offset == 0)
     {
         ctx->header->metadata.offset = DMOD_HEADER_SIZE;
     }
 
-    ctx->header->metadata.length = ctx->metadata_count;
+    ctx->header->metadata.count = ctx->metadata_count;
+
+    ctx->header->metadata.length += 4 + key_size + value_size;
+
+    return 0;
 }
-void compress_memory(void *in_data, size_t in_data_size, std::vector<uint8_t> &out_data)
+
+int xpress_buffer(const void *in, uint8_t **out, size_t len, size_t *outlen, int op, DMOD_COMPRESSOR mode)
 {
-    std::vector<uint8_t> buffer;
-
-    const size_t BUFSIZE = 4096;
-    uint8_t temp_buffer[BUFSIZE];
-
-    z_stream strm;
-    strm.zalloc = Z_NULL;
-    strm.zfree = Z_NULL;
-    strm.next_in = reinterpret_cast<uint8_t *>(in_data);
-    strm.avail_in = in_data_size;
-    strm.next_out = temp_buffer;
-    strm.avail_out = BUFSIZE;
-
-    deflateInit(&strm, Z_BEST_COMPRESSION);
-
-    while (strm.avail_in != 0)
+    if (mode == DMOD_COMPRESSOR_NONE)
     {
-        int res = deflate(&strm, Z_NO_FLUSH);
-        if (res != Z_OK)
+        *out = (uint8_t *)malloc(len);
+        memcpy(*out, in, len);
+        *outlen = len;
+        return 0;
+    }
+
+    if (op != 0 && op != 1)
+    {
+        return 1;
+    }
+
+    if (!in || !out || !outlen)
+    {
+        return 1;
+    }
+
+    // Do compression
+    if (op == 0)
+    {
+        if (mode == DMOD_COMPRESSOR_ZLIB)
         {
-            // Handle error
+            std::vector<uint8_t> buffer;
+
+            const size_t BUFSIZE = 4096;
+            uint8_t temp_buffer[BUFSIZE];
+
+            z_stream strm;
+            strm.zalloc = Z_NULL;
+            strm.zfree = Z_NULL;
+            strm.next_in = (uint8_t *)in;
+            strm.avail_in = len;
+            strm.next_out = temp_buffer;
+            strm.avail_out = BUFSIZE;
+
+            deflateInit(&strm, Z_BEST_COMPRESSION);
+
+            while (strm.avail_in != 0)
+            {
+                int res = deflate(&strm, Z_NO_FLUSH);
+                if (res != Z_OK)
+                {
+                    // Handle error
+                    deflateEnd(&strm);
+                    return 1;
+                }
+
+                if (strm.avail_out == 0)
+                {
+                    buffer.insert(buffer.end(), temp_buffer, temp_buffer + BUFSIZE);
+                    strm.next_out = temp_buffer;
+                    strm.avail_out = BUFSIZE;
+                }
+            }
+
+            int deflate_res = Z_OK;
+            while (deflate_res == Z_OK)
+            {
+                if (strm.avail_out == 0)
+                {
+                    buffer.insert(buffer.end(), temp_buffer, temp_buffer + BUFSIZE);
+                    strm.next_out = temp_buffer;
+                    strm.avail_out = BUFSIZE;
+                }
+                deflate_res = deflate(&strm, Z_FINISH);
+            }
+
+            assert(deflate_res == Z_STREAM_END);
+            buffer.insert(buffer.end(), temp_buffer, temp_buffer + BUFSIZE - strm.avail_out);
             deflateEnd(&strm);
-            return;
-        }
 
-        if (strm.avail_out == 0)
-        {
-            buffer.insert(buffer.end(), temp_buffer, temp_buffer + BUFSIZE);
-            strm.next_out = temp_buffer;
-            strm.avail_out = BUFSIZE;
+            *out = (uint8_t *)malloc(buffer.size());
+            memcpy(*out, buffer.data(), buffer.size());
+            *outlen = buffer.size();
+            return 0;
         }
+        else
+        {
+            return 1;
+        }
+        return 0;
     }
 
-    int deflate_res = Z_OK;
-    while (deflate_res == Z_OK)
+    // Do decompression
+    if (mode == DMOD_COMPRESSOR_ZLIB)
     {
-        if (strm.avail_out == 0)
+        std::vector<uint8_t> out_buffer;
+        z_stream strm;
+        strm.zalloc = Z_NULL;
+        strm.zfree = Z_NULL;
+        strm.next_in = (uint8_t *)in;
+        strm.avail_in = len;
+
+        // Dynamic output buffer
+        strm.next_out = NULL;
+        strm.avail_out = 0;
+
+        inflateInit(&strm);
+
+        int res = Z_OK;
+        while (res == Z_OK)
         {
-            buffer.insert(buffer.end(), temp_buffer, temp_buffer + BUFSIZE);
-            strm.next_out = temp_buffer;
-            strm.avail_out = BUFSIZE;
+            uint8_t buf[4096];
+            strm.next_out = buf;
+            strm.avail_out = sizeof(buf);
+
+            res = inflate(&strm, Z_NO_FLUSH);
+            assert(res != Z_STREAM_ERROR);
+
+            switch (res)
+            {
+            case Z_NEED_DICT:
+                res = Z_DATA_ERROR;
+                break; // Prevent fall-through to Z_DATA_ERROR
+            case Z_DATA_ERROR:
+            case Z_MEM_ERROR:
+                inflateEnd(&strm);
+                return 1;
+            }
+
+            size_t have = sizeof(buf) - strm.avail_out;
+            out_buffer.insert(out_buffer.end(), buf, buf + have);
         }
-        deflate_res = deflate(&strm, Z_FINISH);
+
+        inflateEnd(&strm);
+
+        // Allocate output buffer
+        *out = (uint8_t *)malloc(out_buffer.size());
+        memcpy(*out, out_buffer.data(), out_buffer.size());
+        *outlen = out_buffer.size();
+        return 0;
     }
 
-    assert(deflate_res == Z_STREAM_END);
-    buffer.insert(buffer.end(), temp_buffer, temp_buffer + BUFSIZE - strm.avail_out);
-    deflateEnd(&strm);
-
-    out_data = buffer;
+    return 0;
 }
 
-int xcrypt_buffer(const void *in, void *out, size_t len, const void *key, const void *iv, DMOD_CIPHER type)
+int dmod_encrypt(const void *in, void *out, size_t len, const void *key, const void *nonce, DMOD_CIPHER type)
 {
     if (type == DMOD_CIPHER_NONE)
     {
@@ -190,7 +282,7 @@ int xcrypt_buffer(const void *in, void *out, size_t len, const void *key, const 
 
     ctx = EVP_CIPHER_CTX_new();
 
-    EVP_EncryptInit(ctx, cipher_type, (const unsigned char *)key, (const unsigned char *)iv);
+    EVP_EncryptInit(ctx, cipher_type, (const unsigned char *)key, (const unsigned char *)nonce);
 
     EVP_EncryptUpdate(ctx, (unsigned char *)out, &len_out, (const unsigned char *)in, len);
 
@@ -200,101 +292,15 @@ int xcrypt_buffer(const void *in, void *out, size_t len, const void *key, const 
     return 0;
 }
 
-int xpress_buffer(const void *in, u8 **out, size_t len, size_t *outlen, int op, DMOD_COMPRESSOR mode)
+int dmod_decrypt(const void *in, void *out, size_t len, const void *key, const void *nonce, DMOD_CIPHER type)
 {
-    if (mode == DMOD_COMPRESSOR_NONE)
-    {
-        *out = (u8 *)malloc(len);
-        memcpy(*out, in, len);
-        *outlen = len;
-        return 0;
-    }
-
-    if (op != 0 && op != 1)
-    {
-        return 1;
-    }
-
-    if (!in || !out || !outlen)
-    {
-        return 1;
-    }
-
-    // Do compression
-    if (op == 0)
-    {
-        if (mode == DMOD_COMPRESSOR_ZLIB)
-        {
-            std::vector<uint8_t> buffer;
-            compress_memory((void *)in, len, buffer);
-            *out = (u8 *)malloc(buffer.size());
-            memcpy(*out, buffer.data(), buffer.size());
-            *outlen = buffer.size();
-            return 0;
-        }
-        else
-        {
-            return 1;
-        }
-        return 0;
-    }
-
-    // Do decompression
-    if (mode == DMOD_COMPRESSOR_ZLIB)
-    {
-        std::vector<uint8_t> out_buffer;
-        z_stream strm;
-        strm.zalloc = 0;
-        strm.zfree = 0;
-        strm.next_in = (uint8_t *)in;
-        strm.avail_in = len;
-
-        // Dynamic output buffer
-        strm.next_out = NULL;
-        strm.avail_out = 0;
-
-        inflateInit(&strm);
-
-        int res = Z_OK;
-        while (res == Z_OK)
-        {
-            uint8_t buf[4096];
-            strm.next_out = buf;
-            strm.avail_out = sizeof(buf);
-
-            res = inflate(&strm, Z_NO_FLUSH);
-            assert(res != Z_STREAM_ERROR);
-
-            switch (res)
-            {
-            case Z_NEED_DICT:
-                res = Z_DATA_ERROR;
-            case Z_DATA_ERROR:
-            case Z_MEM_ERROR:
-                inflateEnd(&strm);
-                return 1;
-            }
-
-            size_t have = sizeof(buf) - strm.avail_out;
-            out_buffer.insert(out_buffer.end(), buf, buf + have);
-        }
-
-        inflateEnd(&strm);
-
-        // Allocate output buffer
-        *out = (u8 *)malloc(out_buffer.size());
-        memcpy(*out, out_buffer.data(), out_buffer.size());
-        *outlen = out_buffer.size();
-        return 0;
-    }
-
-    return 0;
+    return dmod_encrypt(in, out, len, key, nonce, type);
 }
 
-void dmod_write(dmod_maker_ctx *ctx, std::string path)
+int dmod_write(dmod_maker_ctx *ctx, const char *path)
 {
-    printf("Writing DMOD to %s\n", path.c_str());
-    FILE *outfile = fopen(path.c_str(), "wb");
+    printf("Writing DMOD to %s\n", path);
+    FILE *outfile = fopen(path, "wb");
 
     ctx->metadata_offset = DMOD_HEADER_SIZE;
 
@@ -306,36 +312,35 @@ void dmod_write(dmod_maker_ctx *ctx, std::string path)
 
     if (ctx->metadata_count > 0)
     {
-        u8 *plaintext_buffer = nullptr;
+        uint8_t *plaintext_buffer = nullptr;
         size_t buffer_size = 0;
 
-        for (u32 i = 0; i < ctx->metadata_count; i++)
+        for (uint32_t i = 0; i < ctx->metadata_count; i++)
         {
-            printf("Processing metadata %s : %s\n", ctx->metadata[i].key, ctx->metadata[i].value);
             if (plaintext_buffer == nullptr)
             {
-                plaintext_buffer = (u8 *)malloc(4);
+                plaintext_buffer = (uint8_t *)malloc(4);
             }
 
-            memcpy(plaintext_buffer + buffer_size, &ctx->metadata[i].keysize, 2);
-            memcpy(plaintext_buffer + buffer_size + 2, &ctx->metadata[i].valuesize, 2);
+            memcpy(plaintext_buffer + buffer_size, &ctx->metadata_list[i].keysize, 2);
+            memcpy(plaintext_buffer + buffer_size + 2, &ctx->metadata_list[i].valuesize, 2);
 
-            size_t new_buf_size = buffer_size + 4 + ctx->metadata[i].keysize + ctx->metadata[i].valuesize + 4;
+            size_t new_buf_size = buffer_size + 4 + ctx->metadata_list[i].keysize + ctx->metadata_list[i].valuesize + 4;
 
-            plaintext_buffer = (u8 *)realloc(plaintext_buffer, new_buf_size);
+            plaintext_buffer = (uint8_t *)realloc(plaintext_buffer, new_buf_size);
 
-            memcpy(plaintext_buffer + buffer_size + 4, ctx->metadata[i].key, ctx->metadata[i].keysize);
-            memcpy(plaintext_buffer + buffer_size + 4 + ctx->metadata[i].keysize, ctx->metadata[i].value, ctx->metadata[i].valuesize);
+            memcpy(plaintext_buffer + buffer_size + 4, ctx->metadata_list[i].key, ctx->metadata_list[i].keysize);
+            memcpy(plaintext_buffer + buffer_size + 4 + ctx->metadata_list[i].keysize, ctx->metadata_list[i].value, ctx->metadata_list[i].valuesize);
 
-            buffer_size += ctx->metadata[i].keysize + ctx->metadata[i].valuesize + 4;
+            buffer_size += ctx->metadata_list[i].keysize + ctx->metadata_list[i].valuesize + 4;
         }
 
-        u8 *compressed = nullptr;
+        uint8_t *compressed = nullptr;
         size_t compressed_size = 0;
         if (ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)
             printf("Compressing metadata...\n");
         printf("Metadata size: %lu\n", buffer_size);
-        if (xpress_buffer(plaintext_buffer, (u8 **)&compressed, buffer_size, &compressed_size, 0, (DMOD_COMPRESSOR)(ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
+        if (xpress_buffer(plaintext_buffer, (uint8_t **)&compressed, buffer_size, &compressed_size, 0, (DMOD_COMPRESSOR)(ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
         {
             printf("Failed to compress metadata\n");
             exit(1);
@@ -344,10 +349,10 @@ void dmod_write(dmod_maker_ctx *ctx, std::string path)
         if (ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)
             printf("Compressed metadata from %lu to %lu\n", buffer_size, compressed_size);
 
-        u8 *ciphertext = (u8 *)malloc(compressed_size);
+        uint8_t *ciphertext = (uint8_t *)malloc(compressed_size);
 
         printf("Encrypting metadata...\n");
-        if (xcrypt_buffer(compressed, ciphertext, compressed_size, ctx->enc_key, ctx->iv, (DMOD_CIPHER)ctx->header->crypto.sym_cipher_algo))
+        if (dmod_encrypt(compressed, ciphertext, compressed_size, ctx->enc_key, ctx->header->crypto.iv, (DMOD_CIPHER)ctx->header->crypto.sym_cipher_algo))
         {
             printf("Failed to encrypt metadata\n");
             exit(1);
@@ -360,56 +365,185 @@ void dmod_write(dmod_maker_ctx *ctx, std::string path)
         free(plaintext_buffer);
         free(ciphertext);
         free(compressed);
+
+        if (ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)
+        {
+            ctx->header->metadata.length = compressed_size;
+
+            dmod_header_final(ctx->header);
+
+            // Rewrite header
+            fseek(outfile, 0, SEEK_SET);
+            fwrite(ctx->header, DMOD_HEADER_SIZE, 1, outfile);
+        }
     }
 
     fclose(outfile);
+
+    return 0;
 }
 
 void dmod_set_cipher(dmod_maker_ctx *ctx, DMOD_CIPHER cipher)
 {
-    ctx->header->crypto.sym_cipher_algo = (u16)cipher;
+    ctx->header->crypto.sym_cipher_algo = (uint16_t)cipher;
     ctx->header->metadata.flags |= DMOD_METADATA_ENCRYPT;
 }
 
-void dmod_ctx_init(dmod_maker_ctx *ctx)
+dmod_maker_ctx *dmod_ctx_new()
 {
+    dmod_maker_ctx *ctx = (dmod_maker_ctx *)malloc(sizeof(dmod_maker_ctx));
     ctx->metadata_offset = 0;
     ctx->crypto_offset = 0;
     ctx->entry_offset = 0;
     ctx->text_offset = 0;
     ctx->metadata_count = 0;
+
+    ctx->header = (dmod_header *)malloc(sizeof(dmod_header));
+    memset(ctx->header, 0, sizeof(dmod_header));
+
+    dmod_header_init(ctx->header);
+
+    return ctx;
 }
 
 void dmod_ctx_free(dmod_maker_ctx *ctx)
 {
-    for (u32 i = 0; i < ctx->metadata_count; i++)
+    for (uint32_t i = 0; i < ctx->metadata_count; i++)
     {
-        if (ctx->metadata[i].key != NULL)
-            free(ctx->metadata[i].key);
+        if (ctx->metadata_list[i].key != NULL)
+            free(ctx->metadata_list[i].key);
 
-        if (ctx->metadata[i].value != NULL)
-            free(ctx->metadata[i].value);
+        if (ctx->metadata_list[i].value != NULL)
+            free(ctx->metadata_list[i].value);
+
+        ctx->metadata_list[i].key = NULL;
+        ctx->metadata_list[i].value = NULL;
     }
+
+    free(ctx->metadata_list);
+    free(ctx->header);
+    free(ctx);
 }
 
-void dmod_set_key(dmod_maker_ctx *ctx, const u8 *key)
+void dmod_set_key(dmod_maker_ctx *ctx, const uint8_t *key)
 {
     memcpy(ctx->enc_key, key, sizeof(ctx->enc_key));
+
+    // Checksum
+    uint8_t digest[32];
+
+    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+
+    const EVP_MD *md = EVP_md5();
+
+    EVP_DigestInit_ex(mdctx, md, NULL);
+    EVP_DigestUpdate(mdctx, key, 32);
+    EVP_DigestFinal_ex(mdctx, digest, NULL);
+    EVP_MD_CTX_free(mdctx);
+
+    memcpy(ctx->header->crypto.password_checksum, digest, sizeof(ctx->header->crypto.password_checksum));
 }
 
-void dmod_set_iv(dmod_maker_ctx *ctx, const u8 *iv)
+void dmod_set_iv(dmod_maker_ctx *ctx, const uint8_t *iv)
 {
-    memcpy(ctx->iv, iv, sizeof(ctx->iv));
+    memcpy(ctx->header->crypto.iv, iv, sizeof(ctx->header->crypto.iv));
 }
 
-void dmod_set_metadata_flags(dmod_maker_ctx *ctx, u16 flags)
+void dmod_set_metadata_flags(dmod_maker_ctx *ctx, uint16_t flags)
 {
     ctx->header->metadata.flags |= flags;
 }
 
-void dmod_lib_init()
+int dmod_lib_init()
 {
-
     SSL_library_init();
     OpenSSL_add_all_algorithms();
+
+    return 0;
+}
+
+int dmod_verify_password(const dmod_header *header, const uint8_t *key, size_t key_size)
+{
+    uint8_t digest[32];
+
+    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+
+    const EVP_MD *md = EVP_md5();
+
+    EVP_DigestInit_ex(mdctx, md, NULL);
+    EVP_DigestUpdate(mdctx, key, key_size);
+    EVP_DigestFinal_ex(mdctx, digest, NULL);
+    EVP_MD_CTX_free(mdctx);
+
+    return memcmp(digest, header->crypto.password_checksum, sizeof(header->crypto.password_checksum)) != 0;
+}
+
+void dmod_derive_key(const uint8_t *password, size_t len, uint8_t *outkey)
+{
+    EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+
+    const EVP_MD *md = EVP_sha256();
+
+    EVP_DigestInit_ex(mdctx, md, NULL);
+    EVP_DigestUpdate(mdctx, password, len);
+    EVP_DigestFinal_ex(mdctx, outkey, NULL);
+    EVP_MD_CTX_free(mdctx);
+}
+
+int dmod_verify_header(const dmod_header *header)
+{
+    if (!header)
+        return 1;
+    // Check magic
+    if (header->preamble.magic != DMOD_PREAMBLE_MAGIC)
+    {
+        return 1;
+    }
+
+    // Checksum on header preamble
+    uint64_t checksum = dmod_preamble_checksum(&header->preamble);
+    if (checksum != header->preamble.checksum)
+    {
+        return 1;
+    }
+
+    // Check version
+    if (header->preamble.version != DMOD_VERSION)
+    {
+        return 1;
+    }
+
+    // Metadata section
+    if (header->metadata.magic != DMOD_METADATA_MAGIC)
+    {
+        return 1;
+    }
+
+    // Checksum on metadata
+    checksum = dmod_metadata_checksum(&header->metadata);
+    if (checksum != header->metadata.checksum)
+    {
+        return 1;
+    }
+
+    // Crypto section
+    if (header->crypto.magic != DMOD_CRYPTO_MAGIC)
+    {
+        return 1;
+    }
+
+    // Checksum on crypto
+    checksum = dmod_crypto_checksum(&header->crypto);
+    if (checksum != header->crypto.checksum)
+    {
+        return 1;
+    }
+
+    checksum = dmod_header_checksum(header);
+    if (checksum != header->checksum)
+    {
+        return 1;
+    }
+
+    return 0;
 }
