@@ -102,7 +102,7 @@ int dmod_add_metadata(dmod_maker_ctx *ctx, const char *key, size_t key_size, con
 
     ctx->header->metadata.count = ctx->metadata_count;
 
-    ctx->header->metadata.length += 4 + key_size + value_size;
+    ctx->header->metadata.length += 16 + key_size + value_size;
 
     return 0;
 }
@@ -319,20 +319,20 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
         {
             if (plaintext_buffer == nullptr)
             {
-                plaintext_buffer = (uint8_t *)malloc(4);
+                plaintext_buffer = (uint8_t *)malloc(16);
             }
 
-            memcpy(plaintext_buffer + buffer_size, &ctx->metadata_list[i].keysize, 2);
-            memcpy(plaintext_buffer + buffer_size + 2, &ctx->metadata_list[i].valuesize, 2);
+            memcpy(plaintext_buffer + buffer_size, &ctx->metadata_list[i].keysize, 8);
+            memcpy(plaintext_buffer + buffer_size + 8, &ctx->metadata_list[i].valuesize, 8);
 
-            size_t new_buf_size = buffer_size + 4 + ctx->metadata_list[i].keysize + ctx->metadata_list[i].valuesize + 4;
+            size_t new_buf_size = buffer_size + 16 + ctx->metadata_list[i].keysize + ctx->metadata_list[i].valuesize + 16;
 
             plaintext_buffer = (uint8_t *)realloc(plaintext_buffer, new_buf_size);
 
-            memcpy(plaintext_buffer + buffer_size + 4, ctx->metadata_list[i].key, ctx->metadata_list[i].keysize);
-            memcpy(plaintext_buffer + buffer_size + 4 + ctx->metadata_list[i].keysize, ctx->metadata_list[i].value, ctx->metadata_list[i].valuesize);
+            memcpy(plaintext_buffer + buffer_size + 16, ctx->metadata_list[i].key, ctx->metadata_list[i].keysize);
+            memcpy(plaintext_buffer + buffer_size + 16 + ctx->metadata_list[i].keysize, ctx->metadata_list[i].value, ctx->metadata_list[i].valuesize);
 
-            buffer_size += ctx->metadata_list[i].keysize + ctx->metadata_list[i].valuesize + 4;
+            buffer_size += ctx->metadata_list[i].keysize + ctx->metadata_list[i].valuesize + 16;
         }
 
         uint8_t *compressed = nullptr;

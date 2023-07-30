@@ -17,8 +17,8 @@ extern "C"
 
     struct dmod_metadata_item
     {
-        uint16_t keysize;
-        uint16_t valuesize;
+        uint64_t keysize;
+        uint64_t valuesize;
 
         uint8_t *key;
         uint8_t *value;
@@ -28,7 +28,7 @@ extern "C"
     {
         uint32_t magic;
         uint16_t flags;
-        uint32_t count;
+        uint64_t count;
         uint64_t length;
         uint64_t offset;
         uint32_t checksum;
@@ -49,7 +49,7 @@ extern "C"
 
     struct dmod_entry
     {
-        uint32_t symbols_count;
+        uint64_t symbols_count;
         uint64_t symbols_entry_offset;
         uint64_t text_entry_offset;
     } __attribute__((packed));
@@ -69,7 +69,7 @@ extern "C"
         struct dmod_entry entry;
 
         // EXPANSION
-        uint8_t reserved[512 - (sizeof(struct dmod_preamble) + sizeof(struct dmod_metadata) + sizeof(struct dmod_crypto) + sizeof(struct dmod_entry) + 4)];
+        uint8_t reserved[256 - (sizeof(struct dmod_preamble) + sizeof(struct dmod_metadata) + sizeof(struct dmod_crypto) + sizeof(struct dmod_entry) + 4)];
 
         // CHECKSUM
         uint32_t checksum;

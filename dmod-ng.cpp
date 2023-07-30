@@ -7,6 +7,7 @@
 #include <fstream>
 #include <map>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -64,39 +65,56 @@ int main(int argc, char *argv[])
 {
     std::vector<std::string> arguments = std::vector<std::string>(argv + 1, argv + argc);
 
-    uint8_t enc_key[32];
+    // uint8_t enc_key[32];
 
-    uint8_t ivkey[16];
-    memset(ivkey, 0xac, 16);
+    // uint8_t ivkey[16];
+    // RAND_bytes(ivkey, 16);
 
-    struct dmod_maker_ctx *ctx = dmod_ctx_new();
+    // struct dmod_maker_ctx *ctx = dmod_ctx_new();
 
-    char password[] = "1234";
+    // std::string password = get_password("Enter password: ");
 
-    dmod_derive_key((uint8_t *)password, 4, enc_key);
+    // dmod_derive_key((uint8_t *)password.c_str(), password.length(), enc_key);
 
-    dmod_set_cipher(ctx, DMOD_CIPHER_AES_256_CTR);
-    dmod_set_key(ctx, enc_key);
-    dmod_set_iv(ctx, ivkey);
+    // dmod_set_cipher(ctx, DMOD_CIPHER_AES_256_CTR);
+    // dmod_set_key(ctx, enc_key);
+    // dmod_set_iv(ctx, ivkey);
 
-    // Set compress
-    dmod_set_metadata_flags(ctx, DMOD_COMPRESSOR_ZLIB);
+    // // Set compress
+    // dmod_set_metadata_flags(ctx, DMOD_COMPRESSOR_ZLIB);
 
-    // Test add metadata
-    dmod_add_metadata(ctx, "author.email", 12, "wesjones2004@gmail.com", 22);
-    dmod_add_metadata(ctx, "author.name", 11, "Wesley Jones", 12);
-    dmod_add_metadata(ctx, "author.website", 14, "https://wesjones2004.github.io", 30);
-    dmod_add_metadata(ctx, "software.version", 16, "0.0.1", 5);
-    dmod_add_metadata(ctx, "software.name", 13, "dmod", 4);
-    dmod_add_metadata(ctx, "\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d", 14, "non-printable", 13);
-    dmod_add_metadata(ctx, "software.description", 20, "A module format for myself", 26);
-    dmod_add_metadata(ctx, "software.license", 16, "Proprietary", 11);
+    // // Test add metadata
+    // dmod_add_metadata(ctx, "author.email", 12, "wesjones2004@gmail.com", 22);
+    // dmod_add_metadata(ctx, "author.name", 11, "Wesley Jones", 12);
+    // dmod_add_metadata(ctx, "software.version", 16, "0.0.1", 5);
+    // dmod_add_metadata(ctx, "software.name", 13, "dmod test", 4);
+    // dmod_add_metadata(ctx, "software.description", 20, "A module format for myself", 26);
+    // dmod_add_metadata(ctx, "software.license", 16, "Proprietary", 11);
 
-    dmod_header_final(ctx->header);
+    // FILE *f = fopen("embedme.bin", "rb");
+    // fseek(f, 0, SEEK_END);
+    // size_t fsize = ftell(f);
+    // fseek(f, 0, SEEK_SET);
+
+    // uint8_t *buf = (uint8_t *)malloc(fsize);
+    // int bytes_read = fread(buf, 1, fsize, f);
+    // fclose(f);
+
+    // if (bytes_read != fsize)
+    // {
+    //     println("Error reading file");
+    //     return 1;
+    // }
+
+    // dmod_add_metadata(ctx, "content", 7, (char *)buf, fsize);
+
+    // free(buf);
+
+    // dmod_header_final(ctx->header);
 
     // dmod_write(ctx, "module.dmod");
 
-    dmod_ctx_free(ctx);
+    // dmod_ctx_free(ctx);
 
     // println();
     // println();
@@ -799,10 +817,11 @@ int print_metadata(const std::string &dmod_file)
     std::map<std::string, std::string> metadata;
     uint8_t *contents = new uint8_t[content_length];
 
-    if (file.readsome((char *)contents, content_length) != content_length)
+    size_t bytes_read = 0;
+
+    while (file.read((char *)contents + bytes_read, content_length - bytes_read) && bytes_read < content_length)
     {
-        println("Error: Failed to read metadata");
-        return 1;
+        bytes_read += file.gcount();
     }
 
     if (header.metadata.flags & DMOD_METADATA_ENCRYPT)
@@ -873,10 +892,10 @@ int print_metadata(const std::string &dmod_file)
 
     do
     {
-        uint16_t key_len = *(uint16_t *)&contents[pos];
-        pos += sizeof(uint16_t);
-        uint16_t val_len = *(uint16_t *)&contents[pos];
-        pos += sizeof(uint16_t);
+        uint64_t key_len = *(uint64_t *)&contents[pos];
+        pos += sizeof(uint64_t);
+        uint64_t val_len = *(uint64_t *)&contents[pos];
+        pos += sizeof(uint64_t);
 
         std::string key((char *)&contents[pos], key_len);
         pos += key_len;
@@ -893,7 +912,7 @@ int print_metadata(const std::string &dmod_file)
 
     for (auto &it : metadata)
     {
-        if (it.first.length() > 4096 || it.second.length() > 4096)
+        if (it.first.length() > 4096)
         {
             println("Not printing metadata because it is too large");
             continue;
@@ -922,25 +941,50 @@ int print_metadata(const std::string &dmod_file)
             }
         }
 
-        if (!key_is_binary && val_is_binary)
+        if (it.second.length() < 4096)
         {
-            println("    - \"" + it.first + "\": (binary data)");
-            continue;
-        }
+            if (!key_is_binary && val_is_binary)
+            {
+                println("    - \"" + it.first + "\": (binary data)");
+                continue;
+            }
 
-        if (key_is_binary && !val_is_binary)
+            if (key_is_binary && !val_is_binary)
+            {
+                println("    - (binary data): \"" + it.second + "\"");
+                continue;
+            }
+
+            if (key_is_binary && val_is_binary)
+            {
+                println("    - (binary data): (binary data)");
+                continue;
+            }
+
+            println("    - \"" + it.first + "\": \"" + it.second + "\"");
+        }
+        else
         {
-            println("    - (binary data): \"" + it.second + "\"");
-            continue;
-        }
+            if (!key_is_binary && val_is_binary)
+            {
+                println("    - \"" + it.first + "\": (binary data)");
+                continue;
+            }
 
-        if (key_is_binary && val_is_binary)
-        {
-            println("    - (binary data): (binary data)");
-            continue;
-        }
+            if (key_is_binary && !val_is_binary)
+            {
+                println("    - (binary data): \"(too large to print)\"");
+                continue;
+            }
 
-        println("    - \"" + it.first + "\": \"" + it.second + "\"");
+            if (key_is_binary && val_is_binary)
+            {
+                println("    - (binary data): (binary data)");
+                continue;
+            }
+
+            println("    - \"" + it.first + "\": \"(too large to print)\"");
+        }
     }
 
     return 0;
