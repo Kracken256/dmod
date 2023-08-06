@@ -51,7 +51,7 @@ extern "C"
         // PREAMBLE
         struct dmod_preamble preamble;
 
-        // METADATA
+        // DATA
         struct dmod_data data;
 
         // CRYPTO
@@ -102,21 +102,21 @@ extern "C"
 
 #define DMOD_HEADER_SIZE sizeof(struct dmod_header)
 #define DMOD_PREAMBLE_SIZE sizeof(struct dmod_preamble)
-#define DMOD_METADATA_SIZE sizeof(struct dmod_data)
+#define DMOD_DATA_SIZE sizeof(struct dmod_data)
 #define DMOD_CRYPTO_SIZE sizeof(struct dmod_crypto)
 
 #define DMOD_PREAMBLE_MAGIC 0x4a572f444f4d447f
-#define DMOD_METADATA_MAGIC 0x4a7dccf1
+#define DMOD_DATA_MAGIC 0x4a7dccf1
 #define DMOD_CRYPTO_MAGIC 0xbe54970e
 
-#define DMOD_METADATA_COMPRESS_MASK 0x000f
-#define DMOD_METADATA_FLAG_NONE 0x0000
-#define DMOD_METADATA_COMPRESS_ALGO_ZLIB 0x0001
-#define DMOD_METADATA_COMPRESS_ALGO_LZMA 0x0002
-#define DMOD_METADATA_COMPRESS_ALGO_LZ4 0x0003
-#define DMOD_METADATA_COMPRESS_ALGO_LZ4HC 0x0004
-#define DMOD_METADATA_COMPRESS_ALGO_ZSTD 0x0005
-#define DMOD_METADATA_ENCRYPT 0x0010
+#define DMOD_DATA_COMPRESS_MASK 0x000f
+#define DMOD_DATA_FLAG_NONE 0x0000
+#define DMOD_DATA_COMPRESS_ALGO_ZLIB 0x0001
+#define DMOD_DATA_COMPRESS_ALGO_LZMA 0x0002
+#define DMOD_DATA_COMPRESS_ALGO_LZ4 0x0003
+#define DMOD_DATA_COMPRESS_ALGO_LZ4HC 0x0004
+#define DMOD_DATA_COMPRESS_ALGO_ZSTD 0x0005
+#define DMOD_DATA_ENCRYPT 0x0010
 
 #define DMOD_SYM_CIPHER_ALGO_NONE 0x0000
 #define DMOD_SYM_CIPHER_ALGO_AES_128 0x0001

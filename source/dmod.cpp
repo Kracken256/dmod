@@ -63,7 +63,7 @@ uint32_t dmod_preamble_checksum(const struct dmod_preamble *header)
 
 uint32_t dmod_data_checksum(const struct dmod_data *data)
 {
-    return dmod_check32(data, DMOD_METADATA_SIZE - 4);
+    return dmod_check32(data, DMOD_DATA_SIZE - 4);
 }
 
 uint32_t dmod_crypto_checksum(const struct dmod_crypto *data)
@@ -81,7 +81,7 @@ void dmod_header_init(struct dmod_header *header)
     header->preamble.magic = DMOD_PREAMBLE_MAGIC;
     header->preamble.version = DMOD_VERSION;
 
-    header->data.magic = DMOD_METADATA_MAGIC;
+    header->data.magic = DMOD_DATA_MAGIC;
     header->data.flags = 0;
     header->data.count = 0;
     header->data.offset = 0;
@@ -360,16 +360,16 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
 
         uint8_t *compressed = nullptr;
         size_t compressed_size = 0;
-        if (ctx->header->data.flags & DMOD_METADATA_COMPRESS_MASK)
+        if (ctx->header->data.flags & DMOD_DATA_COMPRESS_MASK)
             printf("Compressing data...\n");
         printf("Data size: %lu\n", buffer_size);
-        if (xpress_buffer(plaintext_buffer, (uint8_t **)&compressed, buffer_size, &compressed_size, 0, (DMOD_COMPRESSOR)(ctx->header->data.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
+        if (xpress_buffer(plaintext_buffer, (uint8_t **)&compressed, buffer_size, &compressed_size, 0, (DMOD_COMPRESSOR)(ctx->header->data.flags & DMOD_DATA_COMPRESS_MASK)) != 0)
         {
             printf("Failed to compress data\n");
             exit(1);
         }
 
-        if (ctx->header->data.flags & DMOD_METADATA_COMPRESS_MASK)
+        if (ctx->header->data.flags & DMOD_DATA_COMPRESS_MASK)
             printf("Compressed data from %lu to %lu\n", buffer_size, compressed_size);
 
         // Calc the sha256 hash of the data
@@ -399,6 +399,20 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
         {
             EVP_PKEY *pkey = (EVP_PKEY *)ctx->pkey_ptr;
 
+            // Get public key
+            uint8_t pubkey[64];
+            size_t pubkey_size = 0;
+            EVP_PKEY_get_raw_public_key(pkey, nullptr, &pubkey_size);
+            if (pubkey_size != 32)
+            {
+                printf("Invalid public key size\n");
+                return 1;
+            }
+
+            EVP_PKEY_get_raw_public_key(pkey, pubkey, &pubkey_size);
+
+            memcpy(ctx->header->crypto.public_key, pubkey, 32);
+
             uint8_t signature[64];
             if (do_sign(pkey, hash_enc, 32, signature) != 0)
             {
@@ -413,7 +427,7 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
             memcpy(ctx->header->crypto.digital_signature, signature, 64);
         }
 
-        if (ctx->header->data.flags & DMOD_METADATA_COMPRESS_MASK)
+        if (ctx->header->data.flags & DMOD_DATA_COMPRESS_MASK)
         {
             ctx->header->data.length = compressed_size;
         }
@@ -433,7 +447,7 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
 void dmod_set_cipher(dmod_maker_ctx *ctx, DMOD_CIPHER cipher)
 {
     ctx->header->crypto.sym_cipher_algo = (uint16_t)cipher;
-    ctx->header->data.flags |= DMOD_METADATA_ENCRYPT;
+    ctx->header->data.flags |= DMOD_DATA_ENCRYPT;
 }
 
 dmod_maker_ctx *dmod_ctx_new()
@@ -565,8 +579,8 @@ int dmod_verify_header(const dmod_header *header)
         return 1;
     }
 
-    // Metadata section
-    if (header->data.magic != DMOD_METADATA_MAGIC)
+    // Data section
+    if (header->data.magic != DMOD_DATA_MAGIC)
     {
         return 1;
     }

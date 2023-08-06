@@ -616,11 +616,11 @@ int inspect_mode(const std::string &dmod_file)
         println();
     }
 
-    // Metadata section
-    if (header.data.magic != DMOD_METADATA_MAGIC)
+    // Data section
+    if (header.data.magic != DMOD_DATA_MAGIC)
     {
         println("The data magic number is incorrect. The file may be corrupted");
-        std::cout << "Expected magic value = " << std::setw(8) << std::setfill('0') << std::hex << DMOD_METADATA_MAGIC << std::endl;
+        std::cout << "Expected magic value = " << std::setw(8) << std::setfill('0') << std::hex << DMOD_DATA_MAGIC << std::endl;
         std::cout << "Actual magic value = " << std::setw(8) << std::setfill('0') << std::hex << header.data.magic << std::endl;
         println();
     }
@@ -693,19 +693,19 @@ int inspect_mode(const std::string &dmod_file)
     println("      - Valid: " + std::string(preamble_valid ? "Yes" : "No"));
     println("      - Bytes: " + to_hexstring((uint8_t *)&header.preamble, sizeof(struct dmod_preamble), 15));
 
-    println("    - Module data:");
-    println("      - Metadata items: " + std::to_string(header.data.count));
+    println("    - Module content:");
+    println("      - Item count: " + std::to_string(header.data.count));
     println("      - Offset: " + std::to_string(header.data.offset) + " bytes");
     println("      - Size: " + std::to_string(header.data.length) + " bytes");
     println("      - Flags:");
 
     // Check flags
-    bool compressed = header.data.flags & DMOD_METADATA_COMPRESS_MASK;
+    bool compressed = header.data.flags & DMOD_DATA_COMPRESS_MASK;
     if (compressed)
     {
         println("        - Compressed: Yes");
 
-        switch (header.data.flags & DMOD_METADATA_COMPRESS_MASK)
+        switch (header.data.flags & DMOD_DATA_COMPRESS_MASK)
         {
         case DMOD_COMPRESSOR_LZ4:
             println("        - Compression method: LZ4");
@@ -742,7 +742,7 @@ int inspect_mode(const std::string &dmod_file)
         println("        - Compressed: No");
     }
 
-    bool encrypted = header.data.flags & DMOD_METADATA_ENCRYPT;
+    bool encrypted = header.data.flags & DMOD_DATA_ENCRYPT;
     if (encrypted)
     {
         println("        - Encrypted: Yes");
@@ -848,8 +848,7 @@ int print_data(const std::string &dmod_file)
 
     file.seekg(header.data.offset, std::ios::beg);
     size_t content_length = header.data.length;
-    println("Metadata:");
-    std::cout << "  - Metadata offset: " << header.data.offset << std::endl;
+    println("Details:");
     std::cout << "  - Size: " << std::dec << content_length << " bytes" << std::endl;
     std::cout << "  - Item count: " << std::dec << header.data.count << std::endl;
 
@@ -863,7 +862,7 @@ int print_data(const std::string &dmod_file)
         bytes_read += file.gcount();
     }
 
-    if (header.data.flags & DMOD_METADATA_ENCRYPT)
+    if (header.data.flags & DMOD_DATA_ENCRYPT)
     {
         std::string password = get_password("Enter password to view data: ");
 
@@ -900,7 +899,7 @@ int print_data(const std::string &dmod_file)
         if (memcmp(digest, digest_data, sizeof(digest)) != 0)
         {
             println();
-            println("[ ERROR ] : Metadata digest does not match!!");
+            println("[ ERROR ] : Content digest does not match!!");
             println("            The data ciphertext has been");
             println("            tampered with, or the file is corrupted.");
             println();
@@ -909,11 +908,13 @@ int print_data(const std::string &dmod_file)
         }
     }
 
-    if (header.data.flags & DMOD_METADATA_COMPRESS_MASK)
+    println();
+
+    if (header.data.flags & DMOD_DATA_COMPRESS_MASK)
     {
         uint8_t *decompressed;
         size_t decompressed_size;
-        if (xpress_buffer(contents, &decompressed, content_length, &decompressed_size, 1, (DMOD_COMPRESSOR)(header.data.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
+        if (xpress_buffer(contents, &decompressed, content_length, &decompressed_size, 1, (DMOD_COMPRESSOR)(header.data.flags & DMOD_DATA_COMPRESS_MASK)) != 0)
         {
             println("Error: Failed to decompress data");
             return 1;
@@ -947,7 +948,7 @@ int print_data(const std::string &dmod_file)
 
     delete[] contents;
 
-    println("  - Metadata items:");
+    println("Content:");
 
     for (auto &it : data)
     {
@@ -984,45 +985,45 @@ int print_data(const std::string &dmod_file)
         {
             if (!key_is_binary && val_is_binary)
             {
-                println("    - \"" + it.first + "\": (binary data)");
+                println("  - \"" + it.first + "\": (binary data)");
                 continue;
             }
 
             if (key_is_binary && !val_is_binary)
             {
-                println("    - (binary data): \"" + it.second + "\"");
+                println("  - (binary data): \"" + it.second + "\"");
                 continue;
             }
 
             if (key_is_binary && val_is_binary)
             {
-                println("    - (binary data): (binary data)");
+                println("  - (binary data): (binary data)");
                 continue;
             }
 
-            println("    - \"" + it.first + "\": \"" + it.second + "\"");
+            println("  - \"" + it.first + "\": \"" + it.second + "\"");
         }
         else
         {
             if (!key_is_binary && val_is_binary)
             {
-                println("    - \"" + it.first + "\": (binary data)");
+                println("  - \"" + it.first + "\": (binary data)");
                 continue;
             }
 
             if (key_is_binary && !val_is_binary)
             {
-                println("    - (binary data): \"(too large to print)\"");
+                println("  - (binary data): \"(too large to print)\"");
                 continue;
             }
 
             if (key_is_binary && val_is_binary)
             {
-                println("    - (binary data): (binary data)");
+                println("  - (binary data): (binary data)");
                 continue;
             }
 
-            println("    - \"" + it.first + "\": \"(too large to print)\"");
+            println("  - \"" + it.first + "\": \"(too large to print)\"");
         }
     }
 
