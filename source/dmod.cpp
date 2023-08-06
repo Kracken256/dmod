@@ -7,7 +7,38 @@
 #include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
+#include <openssl/pem.h>
 #include <zlib.h>
+
+int do_sign(EVP_PKEY *ed_key, const unsigned char *msg, size_t msg_len, uint8_t sig[64])
+{
+    size_t sig_len;
+    EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
+
+    EVP_DigestSignInit_ex(md_ctx, NULL, NULL, NULL, NULL, ed_key, NULL);
+    EVP_DigestSign(md_ctx, NULL, &sig_len, msg, msg_len);
+    if (sig_len != 64)
+    {
+        return 1;
+    }
+
+    EVP_DigestSign(md_ctx, sig, &sig_len, msg, msg_len);
+    EVP_MD_CTX_free(md_ctx);
+
+    return 0;
+}
+
+int verify_signature(EVP_PKEY *ed_key, const unsigned char *msg, size_t msg_len, uint8_t sig[64])
+{
+    EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
+
+    EVP_DigestVerifyInit_ex(md_ctx, NULL, NULL, NULL, NULL, ed_key, NULL);
+    int ret = EVP_DigestVerify(md_ctx, sig, 64, msg, msg_len);
+
+    EVP_MD_CTX_free(md_ctx);
+
+    return ret == 1;
+}
 
 static uint32_t dmod_check32(const void *data, uint32_t n_bytes)
 {
@@ -30,7 +61,7 @@ uint32_t dmod_preamble_checksum(const struct dmod_preamble *header)
     return dmod_check32(header, DMOD_PREAMBLE_SIZE - 4);
 }
 
-uint32_t dmod_metadata_checksum(const struct dmod_metadata *data)
+uint32_t dmod_data_checksum(const struct dmod_data *data)
 {
     return dmod_check32(data, DMOD_METADATA_SIZE - 4);
 }
@@ -50,11 +81,11 @@ void dmod_header_init(struct dmod_header *header)
     header->preamble.magic = DMOD_PREAMBLE_MAGIC;
     header->preamble.version = DMOD_VERSION;
 
-    header->metadata.magic = DMOD_METADATA_MAGIC;
-    header->metadata.flags = 0;
-    header->metadata.count = 0;
-    header->metadata.offset = 0;
-    header->metadata.length = 0;
+    header->data.magic = DMOD_METADATA_MAGIC;
+    header->data.flags = 0;
+    header->data.count = 0;
+    header->data.offset = 0;
+    header->data.length = 0;
 
     header->crypto.magic = DMOD_CRYPTO_MAGIC;
     header->crypto.sym_cipher_algo = DMOD_SYM_CIPHER_ALGO_NONE;
@@ -65,23 +96,20 @@ void dmod_header_init(struct dmod_header *header)
     memset(header->crypto.public_key, 0, sizeof(header->crypto.public_key));
     memset(header->crypto.password_checksum, 0, sizeof(header->crypto.password_checksum));
 
-    header->entry.symbols_entry_offset = 0;
-    header->entry.text_entry_offset = 0;
-
     memset(header->reserved, 0, sizeof(header->reserved));
 }
 
 void dmod_header_final(struct dmod_header *header)
 {
     header->preamble.checksum = dmod_preamble_checksum(&header->preamble);
-    header->metadata.checksum = dmod_metadata_checksum(&header->metadata);
+    header->data.checksum = dmod_data_checksum(&header->data);
     header->crypto.checksum = dmod_crypto_checksum(&header->crypto);
     header->checksum = dmod_header_checksum(header);
 }
 
-int dmod_add_metadata(dmod_maker_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size)
+int dmod_add_data(dmod_maker_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size)
 {
-    dmod_metadata_item item;
+    dmod_data_item item;
     item.key = nullptr;
     item.value = nullptr;
     item.keysize = key_size;
@@ -90,19 +118,19 @@ int dmod_add_metadata(dmod_maker_ctx *ctx, const char *key, size_t key_size, con
     item.value = (uint8_t *)malloc(value_size);
     memcpy(item.key, key, key_size);
     memcpy(item.value, value, value_size);
-    ctx->metadata_count++;
+    ctx->data_count++;
 
-    ctx->metadata_list = (dmod_metadata_item *)realloc(ctx->metadata_list, ctx->metadata_count * sizeof(dmod_metadata_item));
-    ctx->metadata_list[ctx->metadata_count - 1] = item;
+    ctx->data_list = (dmod_data_item *)realloc(ctx->data_list, ctx->data_count * sizeof(dmod_data_item));
+    ctx->data_list[ctx->data_count - 1] = item;
 
-    if (ctx->header->metadata.offset == 0)
+    if (ctx->header->data.offset == 0)
     {
-        ctx->header->metadata.offset = DMOD_HEADER_SIZE;
+        ctx->header->data.offset = DMOD_HEADER_SIZE;
     }
 
-    ctx->header->metadata.count = ctx->metadata_count;
+    ctx->header->data.count = ctx->data_count;
 
-    ctx->header->metadata.length += 16 + key_size + value_size;
+    ctx->header->data.length += 16 + key_size + value_size;
 
     return 0;
 }
@@ -299,57 +327,52 @@ int dmod_decrypt(const void *in, void *out, size_t len, const void *key, const v
 
 int dmod_write(dmod_maker_ctx *ctx, const char *path)
 {
-    printf("Writing DMOD to %s\n", path);
     FILE *outfile = fopen(path, "wb");
 
-    ctx->metadata_offset = DMOD_HEADER_SIZE;
-
-    printf("Writing header\n");
+    ctx->data_offset = DMOD_HEADER_SIZE;
 
     fwrite(ctx->header, DMOD_HEADER_SIZE, 1, outfile);
 
-    printf("Writing metadata\n");
-
-    if (ctx->metadata_count > 0)
+    if (ctx->data_count > 0)
     {
         uint8_t *plaintext_buffer = nullptr;
         size_t buffer_size = 0;
 
-        for (uint32_t i = 0; i < ctx->metadata_count; i++)
+        for (uint32_t i = 0; i < ctx->data_count; i++)
         {
             if (plaintext_buffer == nullptr)
             {
                 plaintext_buffer = (uint8_t *)malloc(16);
             }
 
-            memcpy(plaintext_buffer + buffer_size, &ctx->metadata_list[i].keysize, 8);
-            memcpy(plaintext_buffer + buffer_size + 8, &ctx->metadata_list[i].valuesize, 8);
+            memcpy(plaintext_buffer + buffer_size, &ctx->data_list[i].keysize, 8);
+            memcpy(plaintext_buffer + buffer_size + 8, &ctx->data_list[i].valuesize, 8);
 
-            size_t new_buf_size = buffer_size + 16 + ctx->metadata_list[i].keysize + ctx->metadata_list[i].valuesize + 16;
+            size_t new_buf_size = buffer_size + 16 + ctx->data_list[i].keysize + ctx->data_list[i].valuesize + 16;
 
             plaintext_buffer = (uint8_t *)realloc(plaintext_buffer, new_buf_size);
 
-            memcpy(plaintext_buffer + buffer_size + 16, ctx->metadata_list[i].key, ctx->metadata_list[i].keysize);
-            memcpy(plaintext_buffer + buffer_size + 16 + ctx->metadata_list[i].keysize, ctx->metadata_list[i].value, ctx->metadata_list[i].valuesize);
+            memcpy(plaintext_buffer + buffer_size + 16, ctx->data_list[i].key, ctx->data_list[i].keysize);
+            memcpy(plaintext_buffer + buffer_size + 16 + ctx->data_list[i].keysize, ctx->data_list[i].value, ctx->data_list[i].valuesize);
 
-            buffer_size += ctx->metadata_list[i].keysize + ctx->metadata_list[i].valuesize + 16;
+            buffer_size += ctx->data_list[i].keysize + ctx->data_list[i].valuesize + 16;
         }
 
         uint8_t *compressed = nullptr;
         size_t compressed_size = 0;
-        if (ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)
-            printf("Compressing metadata...\n");
-        printf("Metadata size: %lu\n", buffer_size);
-        if (xpress_buffer(plaintext_buffer, (uint8_t **)&compressed, buffer_size, &compressed_size, 0, (DMOD_COMPRESSOR)(ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
+        if (ctx->header->data.flags & DMOD_METADATA_COMPRESS_MASK)
+            printf("Compressing data...\n");
+        printf("Data size: %lu\n", buffer_size);
+        if (xpress_buffer(plaintext_buffer, (uint8_t **)&compressed, buffer_size, &compressed_size, 0, (DMOD_COMPRESSOR)(ctx->header->data.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
         {
-            printf("Failed to compress metadata\n");
+            printf("Failed to compress data\n");
             exit(1);
         }
 
-        if (ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)
-            printf("Compressed metadata from %lu to %lu\n", buffer_size, compressed_size);
+        if (ctx->header->data.flags & DMOD_METADATA_COMPRESS_MASK)
+            printf("Compressed data from %lu to %lu\n", buffer_size, compressed_size);
 
-        // Calc the sha256 hash of the metadata
+        // Calc the sha256 hash of the data
         uint8_t digest[32];
         dmod_hash(compressed, compressed_size, digest);
 
@@ -358,32 +381,48 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
 
         uint8_t *ciphertext = (uint8_t *)malloc(compressed_size);
 
-        printf("Encrypting metadata...\n");
+        printf("Encrypting data...\n");
         if (dmod_encrypt(compressed, ciphertext, compressed_size, ctx->enc_key, ctx->header->crypto.iv, (DMOD_CIPHER)ctx->header->crypto.sym_cipher_algo))
         {
-            printf("Failed to encrypt metadata\n");
-            exit(1);
+            printf("Failed to encrypt data\n");
+            return 1;
         }
-        
-        printf("Writing metadata to %u\n", ctx->metadata_offset);
+
         fwrite(ciphertext, compressed_size, 1, outfile);
         fwrite(hash_enc, 32, 1, outfile);
 
-        printf("DMOD file created. SUCCESS.\n");
         free(plaintext_buffer);
         free(ciphertext);
         free(compressed);
 
-        if (ctx->header->metadata.flags & DMOD_METADATA_COMPRESS_MASK)
+        if (ctx->pkey_ptr != nullptr)
         {
-            ctx->header->metadata.length = compressed_size;
+            EVP_PKEY *pkey = (EVP_PKEY *)ctx->pkey_ptr;
 
-            dmod_header_final(ctx->header);
+            uint8_t signature[64];
+            if (do_sign(pkey, hash_enc, 32, signature) != 0)
+            {
+                printf("Failed to sign data\n");
+                return 1;
+            }
+            else
+            {
+                printf("Signed data\n");
+            }
 
-            // Rewrite header
-            fseek(outfile, 0, SEEK_SET);
-            fwrite(ctx->header, DMOD_HEADER_SIZE, 1, outfile);
+            memcpy(ctx->header->crypto.digital_signature, signature, 64);
         }
+
+        if (ctx->header->data.flags & DMOD_METADATA_COMPRESS_MASK)
+        {
+            ctx->header->data.length = compressed_size;
+        }
+
+        dmod_header_final(ctx->header);
+
+        // Rewrite header
+        fseek(outfile, 0, SEEK_SET);
+        fwrite(ctx->header, DMOD_HEADER_SIZE, 1, outfile);
     }
 
     fclose(outfile);
@@ -394,17 +433,19 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
 void dmod_set_cipher(dmod_maker_ctx *ctx, DMOD_CIPHER cipher)
 {
     ctx->header->crypto.sym_cipher_algo = (uint16_t)cipher;
-    ctx->header->metadata.flags |= DMOD_METADATA_ENCRYPT;
+    ctx->header->data.flags |= DMOD_METADATA_ENCRYPT;
 }
 
 dmod_maker_ctx *dmod_ctx_new()
 {
     dmod_maker_ctx *ctx = (dmod_maker_ctx *)malloc(sizeof(dmod_maker_ctx));
-    ctx->metadata_offset = 0;
+    ctx->data_offset = 0;
     ctx->crypto_offset = 0;
     ctx->entry_offset = 0;
     ctx->text_offset = 0;
-    ctx->metadata_count = 0;
+    ctx->data_count = 0;
+    ctx->data_list = nullptr;
+    ctx->pkey_ptr = nullptr;
 
     ctx->header = (dmod_header *)malloc(sizeof(dmod_header));
     memset(ctx->header, 0, sizeof(dmod_header));
@@ -416,21 +457,14 @@ dmod_maker_ctx *dmod_ctx_new()
 
 void dmod_ctx_free(dmod_maker_ctx *ctx)
 {
-    for (uint32_t i = 0; i < ctx->metadata_count; i++)
-    {
-        if (ctx->metadata_list[i].key != NULL)
-            free(ctx->metadata_list[i].key);
+    if (ctx->data_list)
+        free(ctx->data_list);
 
-        if (ctx->metadata_list[i].value != NULL)
-            free(ctx->metadata_list[i].value);
+    if (ctx->header)
+        free(ctx->header);
 
-        ctx->metadata_list[i].key = NULL;
-        ctx->metadata_list[i].value = NULL;
-    }
-
-    free(ctx->metadata_list);
-    free(ctx->header);
-    free(ctx);
+    if (ctx)
+        free(ctx);
 }
 
 void dmod_set_key(dmod_maker_ctx *ctx, const uint8_t *key)
@@ -450,9 +484,41 @@ void dmod_set_iv(dmod_maker_ctx *ctx, const uint8_t *iv)
     memcpy(ctx->header->crypto.iv, iv, sizeof(ctx->header->crypto.iv));
 }
 
-void dmod_set_metadata_flags(dmod_maker_ctx *ctx, uint16_t flags)
+int dmod_load_private_key_pem_file(dmod_maker_ctx *ctx, const char *path)
 {
-    ctx->header->metadata.flags |= flags;
+    EVP_PKEY *ed_key = NULL;
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL)
+    {
+        return 1;
+    }
+    ed_key = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
+    fclose(fp);
+
+    ctx->pkey_ptr = ed_key;
+
+    return 0;
+}
+
+int dmod_load_private_key_pem(dmod_maker_ctx *ctx, const char *pem)
+{
+    EVP_PKEY *ed_key = NULL;
+    BIO *bio = BIO_new_mem_buf(pem, -1);
+    if (bio == NULL)
+    {
+        return 1;
+    }
+    ed_key = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    BIO_free(bio);
+
+    ctx->pkey_ptr = ed_key;
+
+    return 0;
+}
+
+void dmod_set_data_flags(dmod_maker_ctx *ctx, uint16_t flags)
+{
+    ctx->header->data.flags |= flags;
 }
 
 int dmod_lib_init()
@@ -500,14 +566,14 @@ int dmod_verify_header(const dmod_header *header)
     }
 
     // Metadata section
-    if (header->metadata.magic != DMOD_METADATA_MAGIC)
+    if (header->data.magic != DMOD_METADATA_MAGIC)
     {
         return 1;
     }
 
-    // Checksum on metadata
-    checksum = dmod_metadata_checksum(&header->metadata);
-    if (checksum != header->metadata.checksum)
+    // Checksum on data
+    checksum = dmod_data_checksum(&header->data);
+    if (checksum != header->data.checksum)
     {
         return 1;
     }

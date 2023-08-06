@@ -27,7 +27,6 @@ enum OpMode
     Verify,
     Help,
     Version,
-
 };
 
 struct param_block
@@ -38,86 +37,38 @@ struct param_block
     std::string signkey_file;
     std::string verifykey_file;
     std::vector<std::string> files_in;
-    std::map<std::string, std::string> metadata;
-    bool list_metadata;
+    std::map<std::string, std::string> data;
+    bool list_data;
     bool should_exit;
+    bool do_encrypt;
+    bool do_sign;
 };
 
 void println(std::string msg = "");
 
 void print_help();
 
-bool contains_arg(const std::vector<std::string> &args, const std::string &arg, size_t pos = -1);
+std::string to_version(uint16_t num);
+
+bool contains_arg(const std::vector<std::string> &args, const std::string &arg, ssize_t pos = -1);
 
 param_block parse_get_mode(const std::vector<std::string> &args);
 
 int inspect_mode(const std::string &dmod_file);
-int compress_mode(const std::vector<std::string> &args);
-int decompress_mode(const std::vector<std::string> &args);
 
-int print_metadata(const std::string &dmod_file);
+int print_data(const std::string &dmod_file);
 
 bool verify_dmod_file(const std::string &dmod_file);
 
 std::string get_password(std::string prompt);
 
+std::vector<std::string> get_files_recursive(const std::string &path);
+
+int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_out, bool do_encrypt = false, bool do_sign = false, std::string keyfile = "");
+
 int main(int argc, char *argv[])
 {
     std::vector<std::string> arguments = std::vector<std::string>(argv + 1, argv + argc);
-
-    // uint8_t enc_key[32];
-
-    // uint8_t ivkey[16];
-    // RAND_bytes(ivkey, 16);
-
-    // struct dmod_maker_ctx *ctx = dmod_ctx_new();
-
-    // std::string password = get_password("Enter password: ");
-
-    // dmod_derive_key((uint8_t *)password.c_str(), password.length(), enc_key);
-
-    // dmod_set_cipher(ctx, DMOD_CIPHER_AES_256_CTR);
-    // dmod_set_key(ctx, enc_key);
-    // dmod_set_iv(ctx, ivkey);
-
-    // // Set compress
-    // dmod_set_metadata_flags(ctx, DMOD_COMPRESSOR_ZLIB);
-
-    // // Test add metadata
-    // dmod_add_metadata(ctx, "author.email", 12, "wesjones2004@gmail.com", 22);
-    // dmod_add_metadata(ctx, "author.name", 11, "Wesley Jones", 12);
-    // dmod_add_metadata(ctx, "software.version", 16, "0.0.1", 5);
-    // dmod_add_metadata(ctx, "software.name", 13, "dmod test", 4);
-    // dmod_add_metadata(ctx, "software.description", 20, "A module format for myself", 26);
-    // dmod_add_metadata(ctx, "software.license", 16, "Proprietary", 11);
-
-    // FILE *f = fopen("embedme.bin", "rb");
-    // fseek(f, 0, SEEK_END);
-    // size_t fsize = ftell(f);
-    // fseek(f, 0, SEEK_SET);
-
-    // uint8_t *buf = (uint8_t *)malloc(fsize);
-    // int bytes_read = fread(buf, 1, fsize, f);
-    // fclose(f);
-
-    // if (bytes_read != fsize)
-    // {
-    //     println("Error reading file");
-    //     return 1;
-    // }
-
-    // dmod_add_metadata(ctx, "content", 7, (char *)buf, fsize);
-
-    // free(buf);
-
-    // dmod_header_final(ctx->header);
-
-    // dmod_write(ctx, "module.dmod");
-
-    // dmod_ctx_free(ctx);
-
-    // println();
-    // println();
 
     param_block mode = parse_get_mode(arguments);
 
@@ -132,7 +83,7 @@ int main(int argc, char *argv[])
         print_help();
         return 0;
     case OpMode::Version:
-        println("dmod-ng v0.1-dev");
+        println("dmod-ng version " + to_version(DMOD_VERSION));
         return 0;
     }
 
@@ -141,18 +92,23 @@ int main(int argc, char *argv[])
         int res = inspect_mode(mode.dmod_file_in);
         int pres = 0;
 
-        // TODO print metadata
-        if (mode.list_metadata)
+        // TODO print data
+        if (mode.list_data)
         {
-            pres = print_metadata(mode.dmod_file_in);
+            pres = print_data(mode.dmod_file_in);
         }
 
         return res || pres;
     }
-
-    if (mode.list_metadata)
+    else if (mode.mode == OpMode::Pack)
     {
-        int res = print_metadata(mode.dmod_file_in);
+        int res = pack_mode(mode.files_in, mode.dmod_file_out, mode.do_encrypt, mode.do_sign, mode.signkey_file);
+        return res;
+    }
+
+    if (mode.list_data)
+    {
+        int res = print_data(mode.dmod_file_in);
         return res;
     }
 
@@ -214,22 +170,22 @@ param_block parse_get_mode(const std::vector<std::string> &args)
                 params.mode = OpMode::Unpack;
                 break;
             case 'e':
-                if (params.mode != OpMode::None && params.mode != OpMode::Encrypt)
+                if (params.mode != OpMode::None && params.mode != OpMode::Encrypt && params.mode != OpMode::Pack)
                 {
                     println("Multiple modes specified. Can not use 'e' with other modes.");
                     params.should_exit = true;
                     return params;
                 }
-                params.mode = OpMode::Encrypt;
+                params.do_encrypt = true;
                 break;
             case 's':
-                if (params.mode != OpMode::None && params.mode != OpMode::Sign)
+                if (params.mode != OpMode::None && params.mode != OpMode::Sign && params.mode != OpMode::Pack)
                 {
                     println("Multiple modes specified. Can not use 's' with other modes.");
                     params.should_exit = true;
                     return params;
                 }
-                params.mode = OpMode::Sign;
+                params.do_sign = true;
                 break;
             case 'v':
                 if (params.mode != OpMode::None && params.mode != OpMode::Verify)
@@ -241,7 +197,7 @@ param_block parse_get_mode(const std::vector<std::string> &args)
                 params.mode = OpMode::Verify;
                 break;
             case 'l':
-                params.list_metadata = true;
+                params.list_data = true;
                 break;
             }
         }
@@ -255,6 +211,24 @@ param_block parse_get_mode(const std::vector<std::string> &args)
     if (contains_arg(args, "--version"))
     {
         params.mode = OpMode::Version;
+    }
+
+    if (params.do_sign)
+    {
+        if (args.size() < 2 || !contains_arg(args, "--sign-key", 1))
+        {
+            println("Missing --sign-key. Usage: dmod-ng [OPTIONS] --sign-key <key> ...");
+            params.should_exit = true;
+            return params;
+        }
+
+        if (!std::filesystem::exists(args[2]))
+        {
+            println("The file '" + args[2] + "' does not exist and can not be used as a signing key");
+            params.should_exit = true;
+            return params;
+        }
+        params.signkey_file = args[2];
     }
 
     // Check correct modes
@@ -280,7 +254,74 @@ param_block parse_get_mode(const std::vector<std::string> &args)
         return params;
     }
 
-    if (params.list_metadata)
+    if (params.mode == OpMode::Pack && params.do_sign)
+    {
+        if (args.size() < 5)
+        {
+            println("Missing output file. Usage: dmod-ng c <output.dmod> [input files...]");
+            params.should_exit = true;
+            return params;
+        }
+
+        params.dmod_file_out = args[3];
+
+        std::vector<std::string> files;
+
+        for (size_t i = 4; i < args.size(); i++)
+        {
+            if (!std::filesystem::exists(args[i]))
+            {
+                println("The file '" + args[i] + "' does not exist");
+                params.should_exit = true;
+                return params;
+            }
+
+            std::vector<std::string> sub_files = get_files_recursive(args[i]);
+            for (std::string &f : sub_files)
+            {
+                files.push_back(f);
+            }
+        }
+
+        params.files_in = files;
+
+        return params;
+    }
+    else if (params.mode == OpMode::Pack)
+    {
+        if (args.size() < 3)
+        {
+            println("Missing output file. Usage: dmod-ng c <output.dmod> [input files...]");
+            params.should_exit = true;
+            return params;
+        }
+
+        params.dmod_file_out = args[1];
+
+        std::vector<std::string> files;
+
+        for (size_t i = 2; i < args.size(); i++)
+        {
+            if (!std::filesystem::exists(args[i]))
+            {
+                println("The file '" + args[i] + "' does not exist");
+                params.should_exit = true;
+                return params;
+            }
+
+            std::vector<std::string> sub_files = get_files_recursive(args[i]);
+            for (std::string &f : sub_files)
+            {
+                files.push_back(f);
+            }
+        }
+
+        params.files_in = files;
+
+        return params;
+    }
+
+    if (params.list_data)
     {
         if (args.size() < 2)
         {
@@ -301,7 +342,7 @@ param_block parse_get_mode(const std::vector<std::string> &args)
         return params;
     }
 
-    if (params.mode == None && !params.list_metadata)
+    if (params.mode == None && !params.list_data)
     {
         params.mode = OpMode::Help;
         return params;
@@ -310,7 +351,7 @@ param_block parse_get_mode(const std::vector<std::string> &args)
     return params;
 }
 
-bool contains_arg(const std::vector<std::string> &args, const std::string &arg, size_t pos)
+bool contains_arg(const std::vector<std::string> &args, const std::string &arg, ssize_t pos)
 {
     // If -1 search any position
     if (pos == -1)
@@ -353,7 +394,7 @@ void print_help()
     println("  e: Apply encryption");
     println("  s: Add digital signature");
     println("  v: Verify the module's signature");
-    println("  l: List metadata");
+    println("  l: List data");
     println();
 
     println("  --sign-key [path]: The private key to sign the module with");
@@ -362,15 +403,15 @@ void print_help()
 
     println();
 
-    println("  --metadata [key] [value], -m [key] [value]: Add metadata to the module");
-    println("  --remove-metadata [key], -r [key]: Remove metadata from the module");
-    println("  --extract-metadata, -x: Extract metadata from the module to a CSV file");
+    println("  --data [key] [value], -m [key] [value]: Add data to the module");
+    println("  --remove-data [key], -r [key]: Remove data from the module");
+    println("  --extract-data, -x: Extract data from the module to a CSV file");
 
     println();
 
     println("Examples:");
     println("  dmod-ng i module.dmod\t\t\t\t\t\tInspect the module");
-    println("  dmod-ng il module.dmod\t\t\t\t\tInspect the module and list the metadata");
+    println("  dmod-ng il module.dmod\t\t\t\t\tInspect the module and list the data");
     println("  dmod-ng c module.dmod module/\t\t\t\t\tPack the module");
     println("  dmod-ng ce module.dmod module/\t\t\t\tPack the module and encrypt it");
     println("  dmod-ng cse --sign-key /path/private.pem module.dmod module/\tPack the module, encrypt it, and sign it");
@@ -399,6 +440,9 @@ std::string to_version(uint16_t num)
         break;
     case 1:
         result = "v0.1";
+        break;
+    case 2:
+        result = "v0.2";
         break;
     default:
         result = "Unknown";
@@ -528,7 +572,7 @@ int inspect_mode(const std::string &dmod_file)
 
     struct dmod_header header;
     bool preamble_valid = false;
-    bool metadata_valid = false;
+    bool data_valid = false;
     bool crypto_valid = false;
     bool full_header_valid = false;
 
@@ -573,26 +617,26 @@ int inspect_mode(const std::string &dmod_file)
     }
 
     // Metadata section
-    if (header.metadata.magic != DMOD_METADATA_MAGIC)
+    if (header.data.magic != DMOD_METADATA_MAGIC)
     {
-        println("The metadata magic number is incorrect. The file may be corrupted");
+        println("The data magic number is incorrect. The file may be corrupted");
         std::cout << "Expected magic value = " << std::setw(8) << std::setfill('0') << std::hex << DMOD_METADATA_MAGIC << std::endl;
-        std::cout << "Actual magic value = " << std::setw(8) << std::setfill('0') << std::hex << header.metadata.magic << std::endl;
+        std::cout << "Actual magic value = " << std::setw(8) << std::setfill('0') << std::hex << header.data.magic << std::endl;
         println();
     }
 
-    // Checksum on metadata
-    checksum = dmod_metadata_checksum(&header.metadata);
-    if (checksum != header.metadata.checksum)
+    // Checksum on data
+    checksum = dmod_data_checksum(&header.data);
+    if (checksum != header.data.checksum)
     {
-        println("The metadata checksum is incorrect. The file may be corrupted");
+        println("The data checksum is incorrect. The file may be corrupted");
         std::cout << "Expected checksum = " << std::setw(8) << std::setfill('0') << std::hex << checksum << std::endl;
-        std::cout << "Actual checksum = " << std::setw(8) << std::setfill('0') << std::hex << header.metadata.checksum << std::endl;
+        std::cout << "Actual checksum = " << std::setw(8) << std::setfill('0') << std::hex << header.data.checksum << std::endl;
         println();
     }
     else
     {
-        metadata_valid = true;
+        data_valid = true;
     }
 
     // Crypto section
@@ -631,7 +675,7 @@ int inspect_mode(const std::string &dmod_file)
         full_header_valid = true;
     }
 
-    if (!preamble_valid || !metadata_valid || !crypto_valid || !full_header_valid)
+    if (!preamble_valid || !data_valid || !crypto_valid || !full_header_valid)
     {
         println();
         println("The file is corrupted");
@@ -649,19 +693,19 @@ int inspect_mode(const std::string &dmod_file)
     println("      - Valid: " + std::string(preamble_valid ? "Yes" : "No"));
     println("      - Bytes: " + to_hexstring((uint8_t *)&header.preamble, sizeof(struct dmod_preamble), 15));
 
-    println("    - Module metadata:");
-    println("      - Metadata items: " + std::to_string(header.metadata.count));
-    println("      - Offset: " + std::to_string(header.metadata.offset) + " bytes");
-    println("      - Size: " + std::to_string(header.metadata.length) + " bytes");
+    println("    - Module data:");
+    println("      - Metadata items: " + std::to_string(header.data.count));
+    println("      - Offset: " + std::to_string(header.data.offset) + " bytes");
+    println("      - Size: " + std::to_string(header.data.length) + " bytes");
     println("      - Flags:");
 
     // Check flags
-    bool compressed = header.metadata.flags & DMOD_METADATA_COMPRESS_MASK;
+    bool compressed = header.data.flags & DMOD_METADATA_COMPRESS_MASK;
     if (compressed)
     {
         println("        - Compressed: Yes");
 
-        switch (header.metadata.flags & DMOD_METADATA_COMPRESS_MASK)
+        switch (header.data.flags & DMOD_METADATA_COMPRESS_MASK)
         {
         case DMOD_COMPRESSOR_LZ4:
             println("        - Compression method: LZ4");
@@ -698,7 +742,7 @@ int inspect_mode(const std::string &dmod_file)
         println("        - Compressed: No");
     }
 
-    bool encrypted = header.metadata.flags & DMOD_METADATA_ENCRYPT;
+    bool encrypted = header.data.flags & DMOD_METADATA_ENCRYPT;
     if (encrypted)
     {
         println("        - Encrypted: Yes");
@@ -708,9 +752,9 @@ int inspect_mode(const std::string &dmod_file)
         println("        - Encrypted: No");
     }
 
-    std::cout << "      - Checksum: " << std::setw(8) << std::setfill('0') << std::hex << header.metadata.checksum << std::endl;
-    println("      - Valid: " + std::string(metadata_valid ? "Yes" : "No"));
-    println("      - Bytes: " + to_hexstring((uint8_t *)&header.metadata, sizeof(struct dmod_metadata), 15));
+    std::cout << "      - Checksum: " << std::setw(8) << std::setfill('0') << std::hex << header.data.checksum << std::endl;
+    println("      - Valid: " + std::string(data_valid ? "Yes" : "No"));
+    println("      - Bytes: " + to_hexstring((uint8_t *)&header.data, sizeof(struct dmod_data), 15));
 
     println("    - Module crypto settings:");
     println("      - Symmetric algorithm: " + to_symmetric_algorithm(header.crypto.sym_cipher_algo));
@@ -756,11 +800,6 @@ int inspect_mode(const std::string &dmod_file)
     println("      - Valid: " + std::string(crypto_valid ? "Yes" : "No"));
     println("      - Bytes: " + to_hexstring((uint8_t *)&header.crypto, sizeof(struct dmod_crypto), 15));
 
-    println("  - Module entry table:");
-    println("    - Symbol count: " + std::to_string(header.entry.symbols_count));
-    println("    - Symbol table offset: " + std::to_string(header.entry.symbols_entry_offset) + " bytes");
-    println("    - Entry offset: " + std::to_string(header.entry.text_entry_offset) + " bytes");
-
     uint8_t reserve_cmp[sizeof(header.reserved)];
     memset(reserve_cmp, 0, sizeof(reserve_cmp));
 
@@ -784,7 +823,7 @@ int inspect_mode(const std::string &dmod_file)
     return 0;
 }
 
-int print_metadata(const std::string &dmod_file)
+int print_data(const std::string &dmod_file)
 {
     if (!verify_dmod_file(dmod_file))
     {
@@ -807,14 +846,14 @@ int print_metadata(const std::string &dmod_file)
         return 1;
     }
 
-    file.seekg(header.metadata.offset, std::ios::beg);
-    size_t content_length = header.metadata.length;
+    file.seekg(header.data.offset, std::ios::beg);
+    size_t content_length = header.data.length;
     println("Metadata:");
-    std::cout << "  - Metadata offset: " << header.metadata.offset << std::endl;
+    std::cout << "  - Metadata offset: " << header.data.offset << std::endl;
     std::cout << "  - Size: " << std::dec << content_length << " bytes" << std::endl;
-    std::cout << "  - Item count: " << std::dec << header.metadata.count << std::endl;
+    std::cout << "  - Item count: " << std::dec << header.data.count << std::endl;
 
-    std::map<std::string, std::string> metadata;
+    std::map<std::string, std::string> data;
     uint8_t *contents = new uint8_t[content_length];
 
     size_t bytes_read = 0;
@@ -824,9 +863,9 @@ int print_metadata(const std::string &dmod_file)
         bytes_read += file.gcount();
     }
 
-    if (header.metadata.flags & DMOD_METADATA_ENCRYPT)
+    if (header.data.flags & DMOD_METADATA_ENCRYPT)
     {
-        std::string password = get_password("Enter password to view metadata: ");
+        std::string password = get_password("Enter password to view data: ");
 
         uint8_t enc_key[32];
         dmod_derive_key((const uint8_t *)password.c_str(), password.length(), enc_key);
@@ -845,10 +884,10 @@ int print_metadata(const std::string &dmod_file)
 
         contents = plaintext;
 
-        uint8_t digest_metadata[32];
-        if ((file.readsome((char *)digest_metadata, sizeof(digest_metadata)) != sizeof(digest_metadata)))
+        uint8_t digest_data[32];
+        if ((file.readsome((char *)digest_data, sizeof(digest_data)) != sizeof(digest_data)))
         {
-            println("Error: Failed to read metadata digest");
+            println("Error: Failed to read data digest");
             return 1;
         }
 
@@ -858,11 +897,11 @@ int print_metadata(const std::string &dmod_file)
 
         dmod_decrypt(digest_enc, digest, 32, enc_key, header.crypto.iv, (DMOD_CIPHER)header.crypto.sym_cipher_algo);
 
-        if (memcmp(digest, digest_metadata, sizeof(digest)) != 0)
+        if (memcmp(digest, digest_data, sizeof(digest)) != 0)
         {
             println();
             println("[ ERROR ] : Metadata digest does not match!!");
-            println("            The metadata ciphertext has been");
+            println("            The data ciphertext has been");
             println("            tampered with, or the file is corrupted.");
             println();
             println("There is a 0.0000059604644775390625 % probability that the password validated but is incorrect.");
@@ -870,13 +909,13 @@ int print_metadata(const std::string &dmod_file)
         }
     }
 
-    if (header.metadata.flags & DMOD_METADATA_COMPRESS_MASK)
+    if (header.data.flags & DMOD_METADATA_COMPRESS_MASK)
     {
         uint8_t *decompressed;
         size_t decompressed_size;
-        if (xpress_buffer(contents, &decompressed, content_length, &decompressed_size, 1, (DMOD_COMPRESSOR)(header.metadata.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
+        if (xpress_buffer(contents, &decompressed, content_length, &decompressed_size, 1, (DMOD_COMPRESSOR)(header.data.flags & DMOD_METADATA_COMPRESS_MASK)) != 0)
         {
-            println("Error: Failed to decompress metadata");
+            println("Error: Failed to decompress data");
             return 1;
         }
 
@@ -902,7 +941,7 @@ int print_metadata(const std::string &dmod_file)
         std::string val((char *)&contents[pos], val_len);
         pos += val_len;
 
-        metadata[key] = val;
+        data[key] = val;
 
     } while (pos < content_length);
 
@@ -910,11 +949,11 @@ int print_metadata(const std::string &dmod_file)
 
     println("  - Metadata items:");
 
-    for (auto &it : metadata)
+    for (auto &it : data)
     {
         if (it.first.length() > 4096)
         {
-            println("Not printing metadata because it is too large");
+            println("Not printing data because it is too large");
             continue;
         }
 
@@ -990,16 +1029,6 @@ int print_metadata(const std::string &dmod_file)
     return 0;
 }
 
-int compress_mode(const std::vector<std::string> &args)
-{
-    return 0;
-}
-
-int decompress_mode(const std::vector<std::string> &args)
-{
-    return 0;
-}
-
 std::string get_password(std::string prompt)
 {
     // Hide password input cross-platform
@@ -1022,9 +1051,140 @@ std::string get_password(std::string prompt)
 
     char *pass = getpass(prompt.c_str());
     password = pass;
-    free(pass);
 
 #endif
 
     return password;
+}
+
+std::vector<std::string> get_files_recursive(const std::string &path)
+{
+    std::vector<std::string> files;
+
+    try
+    {
+        for (const auto &entry : std::filesystem::directory_iterator(path))
+        {
+            if (entry.is_directory() && !entry.is_symlink())
+            {
+                std::vector<std::string> sub_files = get_files_recursive(entry.path().string());
+                files.insert(files.end(), sub_files.begin(), sub_files.end());
+            }
+            else
+            {
+                if (!entry.is_regular_file())
+                    continue;
+
+                // Check if I have read access to the file
+                try
+                {
+                    std::ifstream file(entry.path().string());
+                    if (!file.is_open())
+                        continue;
+                    file.close();
+                }
+                catch (std::ifstream::failure &e)
+                {
+                    continue;
+                }
+
+                files.push_back(entry.path().string());
+            }
+        }
+    }
+    catch (std::filesystem::filesystem_error &e)
+    {
+        println("Error: " + std::string(e.what()));
+    }
+
+    return files;
+}
+
+int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_out, bool do_encrypt, bool do_sign, std::string keyfile)
+{
+    println("Packing files into " + dmod_file_out);
+
+    dmod_lib_init();
+
+    struct dmod_maker_ctx *ctx = dmod_ctx_new();
+    dmod_set_data_flags(ctx, DMOD_COMPRESSOR_ZLIB);
+
+    if (do_encrypt)
+    {
+        uint8_t enc_key[32];
+        uint8_t enc_iv[16];
+        RAND_bytes(enc_iv, 16);
+
+        std::string password = get_password("Enter password: ");
+        std::string password_confirm = get_password("Confirm password: ");
+
+        if (password != password_confirm)
+        {
+            println("Error: Passwords do not match");
+            dmod_ctx_free(ctx);
+            return 1;
+        }
+
+        dmod_derive_key((uint8_t *)password.c_str(), password.length(), enc_key);
+
+        dmod_set_cipher(ctx, DMOD_CIPHER_AES_256_CTR);
+        dmod_set_key(ctx, enc_key);
+        dmod_set_iv(ctx, enc_iv);
+    }
+
+    if (do_sign)
+    {
+        if (dmod_load_private_key_pem_file(ctx, keyfile.c_str()) != 0)
+        {
+            println("Error: Could not load private key file " + keyfile);
+            dmod_ctx_free(ctx);
+            return 1;
+        }
+    }
+
+    for (const std::string &file_name : files_in)
+    {
+        if (file_name == dmod_file_out)
+        {
+            println("Error: Input file cannot be the same as the output file");
+            dmod_ctx_free(ctx);
+            return 1;
+        }
+
+        std::ifstream file(file_name, std::ios::binary | std::ios::ate);
+
+        if (!file.is_open())
+        {
+            println("Error: Could not open file " + file_name + " for reading. Skipping.");
+            continue;
+        }
+
+        println("  - Adding file " + file_name);
+
+        std::streamsize size = file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        char *contents = new char[size];
+        int bytes_read = 0;
+        do
+        {
+            bytes_read = file.readsome(contents + bytes_read, size - bytes_read);
+        } while (bytes_read > 0);
+
+        file.close();
+
+        std::string file_name_out = file_name;
+
+        dmod_add_data(ctx, file_name_out.c_str(), file_name_out.length(), contents, size);
+    }
+
+    dmod_header_final(ctx->header);
+
+    dmod_write(ctx, dmod_file_out.c_str());
+
+    dmod_ctx_free(ctx);
+
+    println("Done");
+
+    return 0;
 }
