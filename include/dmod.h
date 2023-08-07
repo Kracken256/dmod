@@ -195,7 +195,7 @@ extern "C"
     /// @return 0 if the DMOD module data section was read, else > 0
     /// @note The caller is responsible for freeing the content array
     /// @note If compression is used, the content will be decompressed based on the header
-    int dmod_read_data(struct dmod_data_item *content, dmod_header *header, const char *path, uint8_t *enc_key);
+    int dmod_read_data(struct dmod_data_item **content, dmod_header *header, const char *path, uint8_t *enc_key);
 
     /// @brief Read a DMOD module data item
     /// @param content DMOD data item to read
@@ -203,7 +203,9 @@ extern "C"
     /// @param path Path to the DMOD module
     /// @param key Data item key
     /// @param key_size Data item key size in bytes
-    int dmod_read_data_item(struct dmod_data_item *content, dmod_header *header, const char *path, const char *key, size_t key_size);
+    /// @param enc_key 32 byte encryption key. If NULL, no decryption is performed
+    /// @return 0 if the DMOD module data item was read, else > 0
+    int dmod_read_data_item(struct dmod_data_item *content, dmod_header *header, const char *path, const char *key, size_t key_size, uint8_t *enc_key);
 
     /// @brief Set the symetric stream cipher to use
     /// @param ctx DMOD maker context
@@ -239,6 +241,18 @@ extern "C"
     /// @param pem NULL terminated string containing the Ed25519 private key PEM
     /// @return 0 if the Ed25519 private key PEM was loaded, 1 otherwise
     int dmod_load_private_key_pem(struct dmod_content_ctx *ctx, const char *pem);
+
+    /// @brief Set the Ed25519 public key PEM file path
+    /// @param ctx DMOD maker context
+    /// @param path Path to the Ed25519 public key PEM file
+    /// @return 0 if the Ed25519 public key PEM file was loaded, 1 otherwise
+    int dmod_load_public_key_pem_file(struct dmod_content_ctx *ctx, const char *path);
+
+    /// @brief Set the Ed25519 public key PEM
+    /// @param ctx DMOD maker context
+    /// @param pem NULL terminated string containing the Ed25519 public key PEM
+    /// @return 0 if the Ed25519 public key PEM was loaded, 1 otherwise
+    int dmod_load_public_key_pem(struct dmod_content_ctx *ctx, const char *pem);
 
     /// @brief Set a flag in the data section
     /// @param ctx DMOD maker context
@@ -286,13 +300,19 @@ extern "C"
     /// @param password Password to derive the key from
     /// @param len Length of the password
     /// @param outkey Pointer to store the derived 32 byte key
-    void dmod_derive_key(const uint8_t *password, size_t len, uint8_t *outkey);
+    void dmod_derive_key(const void *inkey, size_t len, uint8_t *outkey);
 
     /// @brief DMOD standard hash function
     /// @param in Input buffer
     /// @param len Length of the input buffer
     /// @param out 32 byte output buffer
     void dmod_hash(const void *in, size_t len, uint8_t *out);
+
+    /// @brief DMOD Verify a DMOD module signature with an Ed25519 public key
+    /// @param header DMOD context previously loaded with the header
+    /// @param path Path to the DMOD module
+    /// @return 0 if the DMOD module signature was verified, 1 otherwise
+    int dmod_verify_signature(const char *module_path);
 
 #ifdef __cplusplus
 }

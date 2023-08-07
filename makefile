@@ -1,5 +1,5 @@
 CC = g++
-CXXFLAGS = -Iinclude -lz -O0 -g
+CXXFLAGS = -Iinclude -lz  -g
 
 SOURCES = $(shell find source -name '*.cpp' -printf '%P\n' -not -name 'dmod-ng.cpp')
 OBJDIR = obj

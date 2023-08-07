@@ -8,6 +8,7 @@
 #include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
+#include <openssl/err.h>
 #include <openssl/pem.h>
 #include <zlib.h>
 
@@ -41,7 +42,7 @@ int verify_signature(EVP_PKEY *ed_key, const unsigned char *msg, size_t msg_len,
 
     EVP_MD_CTX_free(md_ctx);
 
-    return ret == 1;
+    return ret != 1;
 }
 
 static uint32_t dmod_check32(const void *data, uint32_t n_bytes)
@@ -378,22 +379,19 @@ int dmod_write(dmod_content_ctx *ctx, const char *path)
 
         // Calc the sha256 hash of the data
         uint8_t digest[32];
-        dmod_hash(compressed, compressed_size, digest);
-
-        uint8_t hash_enc[32];
-        dmod_encrypt(digest, hash_enc, 32, ctx->enc_key, ctx->header->crypto.iv, (DMOD_CIPHER)ctx->header->crypto.sym_cipher_algo);
 
         uint8_t *ciphertext = (uint8_t *)malloc(compressed_size);
 
-        printf("Encrypting data...\n");
         if (dmod_encrypt(compressed, ciphertext, compressed_size, ctx->enc_key, ctx->header->crypto.iv, (DMOD_CIPHER)ctx->header->crypto.sym_cipher_algo))
         {
             printf("Failed to encrypt data\n");
             return 1;
         }
 
+        dmod_hash(ciphertext, compressed_size, digest);
+
         fwrite(ciphertext, compressed_size, 1, outfile);
-        fwrite(hash_enc, 32, 1, outfile);
+        fwrite(digest, 32, 1, outfile);
 
         free(plaintext_buffer);
         free(ciphertext);
@@ -418,7 +416,7 @@ int dmod_write(dmod_content_ctx *ctx, const char *path)
             memcpy(ctx->header->crypto.public_key, pubkey, 32);
 
             uint8_t signature[64];
-            if (do_sign(pkey, hash_enc, 32, signature) != 0)
+            if (do_sign(pkey, digest, 32, signature) != 0)
             {
                 printf("Failed to sign data\n");
                 return 1;
@@ -542,6 +540,7 @@ void dmod_set_data_flags(dmod_content_ctx *ctx, uint16_t flags)
 int dmod_lib_init()
 {
     OpenSSL_add_all_algorithms();
+    ERR_load_crypto_strings();
 
     return 0;
 }
@@ -555,9 +554,9 @@ int dmod_verify_password(const dmod_header *header, const uint8_t *key, size_t k
     return memcmp(digest, header->crypto.password_checksum, sizeof(header->crypto.password_checksum)) != 0;
 }
 
-void dmod_derive_key(const uint8_t *password, size_t len, uint8_t *outkey)
+void dmod_derive_key(const void *key, size_t len, uint8_t *outkey)
 {
-    dmod_hash(password, len, outkey);
+    dmod_hash(key, len, outkey);
 }
 
 int dmod_verify_header(const dmod_header *header)
@@ -638,7 +637,7 @@ int dmod_read_header(struct dmod_header *header, const char *path)
         return 1;
     }
 
-    size_t bytes_read = fread(header, DMOD_HEADER_SIZE, 1, fp);
+    size_t bytes_read = fread(header, 1, DMOD_HEADER_SIZE, fp);
 
     fclose(fp);
 
@@ -659,6 +658,118 @@ int dmod_read_data(dmod_data_item **content, dmod_header *header, const char *pa
     size_t bytes_read = 0;
 
     std::ifstream file(path, std::ios::binary);
+    file.seekg(header->data.offset);
+
+    while (file.read((char *)contents + bytes_read, content_length - bytes_read) && bytes_read < content_length)
+    {
+        bytes_read += file.gcount();
+    }
+
+    if (header->data.flags & DMOD_DATA_ENCRYPT)
+    {
+        if (dmod_verify_password(header, enc_key, 32) != 0)
+        {
+            file.close();
+            delete[] contents;
+            return 2;
+        }
+
+        file.seekg(-32, std::ios::end);
+
+        uint8_t digest_data[32];
+        if ((file.readsome((char *)digest_data, sizeof(digest_data)) != sizeof(digest_data)))
+        {
+            file.close();
+            delete[] contents;
+            return 4;
+        }
+
+        uint8_t digest[32];
+        dmod_hash(contents, content_length, digest);
+
+        if (memcmp(digest, digest_data, sizeof(digest)) != 0)
+        {
+            file.close();
+            delete[] contents;
+            return 6;
+        }
+
+        uint8_t *plaintext = new uint8_t[content_length];
+
+        if (dmod_decrypt(contents, plaintext, content_length, enc_key, header->crypto.iv, (DMOD_CIPHER)header->crypto.sym_cipher_algo) != 0)
+        {
+            file.close();
+            delete[] contents;
+            delete[] plaintext;
+            return 3;
+        }
+
+        delete[] contents;
+
+        contents = plaintext;
+    }
+
+    if (header->data.flags & DMOD_DATA_COMPRESS_MASK)
+    {
+        uint8_t *decompressed;
+        size_t decompressed_size;
+        if (xpress_buffer(contents, &decompressed, content_length, &decompressed_size, 1, (DMOD_COMPRESSOR)(header->data.flags & DMOD_DATA_COMPRESS_MASK)) != 0)
+        {
+            file.close();
+            delete[] contents;
+            return 7;
+        }
+
+        delete[] contents;
+
+        contents = decompressed;
+        content_length = decompressed_size;
+    }
+
+    file.close();
+    size_t raw_pos = 0;
+
+    struct dmod_data_item *content_items = new struct dmod_data_item[header->data.count];
+
+    for (size_t i = 0; i < header->data.count; i++)
+    {
+        content_items[i].keysize = *(uint64_t *)(contents + raw_pos);
+        raw_pos += sizeof(uint64_t);
+
+        content_items[i].valuesize = *(uint64_t *)(contents + raw_pos);
+        raw_pos += sizeof(uint64_t);
+
+        content_items[i].key = new uint8_t[content_items[i].keysize];
+        memcpy(content_items[i].key, contents + raw_pos, content_items[i].keysize);
+        raw_pos += content_items[i].keysize;
+
+        content_items[i].value = new uint8_t[content_items[i].valuesize];
+        memcpy(content_items[i].value, contents + raw_pos, content_items[i].valuesize);
+        raw_pos += content_items[i].valuesize;
+    }
+
+    *content = (struct dmod_data_item *)content_items;
+
+    delete[] contents;
+
+    return 0;
+}
+
+int dmod_read_data_item(dmod_data_item *item, dmod_header *header, const char *path, const char *key, size_t key_size, uint8_t *enc_key)
+{
+    if (dmod_verify_header(header) != 0)
+    {
+        return 1;
+    }
+
+    size_t content_length = header->data.length;
+
+    uint8_t *contents = new uint8_t[content_length];
+
+    size_t bytes_read = 0;
+
+    std::ifstream file(path, std::ios::binary);
+    file.seekg(header->data.offset);
 
     while (file.read((char *)contents + bytes_read, content_length - bytes_read) && bytes_read < content_length)
     {
@@ -734,29 +845,169 @@ int dmod_read_data(dmod_data_item **content, dmod_header *header, const char *pa
 
     file.close();
 
-    size_t pos = 0;
-    size_t inner_data_length = 0;
+    size_t raw_pos = 0;
+    bool found = false;
 
-    do
+    struct dmod_data_item *content_items = new struct dmod_data_item();
+
+    for (size_t i = 0; i < header->data.count; i++)
     {
-        uint64_t key_len = *(uint64_t *)&contents[pos];
-        pos += sizeof(uint64_t);
-        uint64_t val_len = *(uint64_t *)&contents[pos];
-        pos += sizeof(uint64_t);
+        content_items->keysize = *(uint64_t *)(contents + raw_pos);
+        raw_pos += sizeof(uint64_t);
 
-        pos += key_len + val_len;
+        content_items->valuesize = *(uint64_t *)(contents + raw_pos);
+        raw_pos += sizeof(uint64_t);
 
-        inner_data_length += sizeof(uint64_t) + sizeof(uint64_t) + key_len + val_len;
+        if (content_items->keysize != key_size)
+        {
+            raw_pos += content_items->keysize + content_items->valuesize;
+            continue;
+        }
 
-    } while (pos < content_length);
+        if (memcmp(contents + raw_pos, key, key_size) != 0)
+        {
+            raw_pos += content_items->keysize + content_items->valuesize;
+            continue;
+        }
 
-    if (inner_data_length != content_length)
+        content_items->key = new uint8_t[content_items->keysize];
+        memcpy(content_items->key, contents + raw_pos, content_items->keysize);
+        raw_pos += content_items->keysize;
+
+        content_items->value = new uint8_t[content_items->valuesize];
+        memcpy(content_items->value, contents + raw_pos, content_items->valuesize);
+        raw_pos += content_items->valuesize;
+
+        found = true;
+
+        break;
+    }
+
+    delete[] contents;
+
+    if (!found)
     {
-        delete[] contents;
         return 8;
     }
 
-    *content = (struct dmod_data_item *)contents;
+    *item = *content_items;
+
+    return 0;
+}
+
+int dmod_load_public_key_pem_file(dmod_content_ctx *ctx, const char *path)
+{
+    EVP_PKEY *ed_key = NULL;
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL)
+    {
+        return 1;
+    }
+
+    ed_key = PEM_read_PUBKEY(fp, NULL, NULL, NULL);
+    fclose(fp);
+
+    ctx->pkey_ptr = ed_key;
+
+    return ed_key == NULL;
+}
+
+int dmod_load_public_key_pem(dmod_content_ctx *ctx, const char *pem)
+{
+    EVP_PKEY *ed_key = NULL;
+    BIO *bio = BIO_new_mem_buf(pem, -1);
+    if (bio == NULL)
+    {
+        return 1;
+    }
+    ed_key = PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
+    BIO_free(bio);
+
+    ctx->pkey_ptr = ed_key;
+
+    return 0;
+}
+
+int dmod_verify_signature(const char *module_path)
+{
+    struct dmod_header header;
+
+    if (dmod_read_header(&header, module_path) != 0)
+    {
+        return 1;
+    }
+
+    if (dmod_verify_header(&header) != 0)
+    {
+        return 2;
+    }
+
+    EVP_PKEY *ed_key;
+
+    // Convert 32 byte key to PKEY
+
+    ed_key = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, NULL, header.crypto.public_key, 32);
+
+    if (!ed_key)
+    {
+        return 4;
+    }
+
+    std::ifstream file(module_path, std::ios::binary);
+    if (!file.is_open())
+    {
+        EVP_PKEY_free(ed_key);
+        return 9;
+    }
+
+    file.seekg(0, std::ios::end);
+    size_t file_size = file.tellg();
+
+    file.seekg(-32, std::ios::end);
+
+    uint8_t content_digest[32];
+    if (file.readsome((char *)content_digest, sizeof(content_digest)) != sizeof(content_digest))
+    {
+        EVP_PKEY_free(ed_key);
+        file.close();
+        return 5;
+    }
+
+    file.seekg(header.data.offset, std::ios::beg);
+
+    size_t content_length = file_size - header.data.offset - 32;
+
+    uint8_t *contents = new uint8_t[content_length];
+
+    if (file.readsome((char *)contents, content_length) != content_length)
+    {
+        EVP_PKEY_free(ed_key);
+        file.close();
+        delete[] contents;
+        return 6;
+    }
+
+    file.close();
+
+    uint8_t digest[32];
+
+    dmod_hash(contents, content_length, digest);
+
+    delete[] contents;
+
+    if (memcmp(digest, content_digest, sizeof(digest)) != 0)
+    {
+        EVP_PKEY_free(ed_key);
+        return 7;
+    }
+
+    if (verify_signature(ed_key, digest, sizeof(digest), header.crypto.digital_signature) != 0)
+    {
+        EVP_PKEY_free(ed_key);
+        return 8;
+    }
+
+    EVP_PKEY_free(ed_key);
 
     return 0;
 }
