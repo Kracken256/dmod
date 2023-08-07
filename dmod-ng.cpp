@@ -22,9 +22,6 @@ enum OpMode
     Inspect,
     Pack,
     Unpack,
-    Encrypt,
-    Sign,
-    Verify,
     Help,
     Version,
 };
@@ -42,6 +39,7 @@ struct param_block
     bool do_encrypt;
     bool do_sign;
     bool do_compress;
+    bool do_verify;
 };
 
 void println(std::string msg = "");
@@ -87,38 +85,29 @@ int main(int argc, char *argv[])
         return 0;
     }
 
+    int res = 0;
+
     if (mode.mode == OpMode::Inspect)
     {
-        int res = inspect_mode(mode.dmod_file_in);
-        int pres = 0;
-
-        // TODO print data
-        if (mode.list_data)
-        {
-            pres = list_contents(mode.dmod_file_in);
-        }
-
-        return res || pres;
+        res &= inspect_mode(mode.dmod_file_in) << 1;
     }
-    else if (mode.mode == OpMode::Pack)
+
+    if (mode.mode == OpMode::Pack)
     {
-        int res = pack_mode(mode.files_in, mode.dmod_file_out, mode.do_encrypt, mode.do_sign, mode.signkey_file, mode.do_compress);
-        return res;
+        res &= pack_mode(mode.files_in, mode.dmod_file_out, mode.do_encrypt, mode.do_sign, mode.signkey_file, mode.do_compress) << 2;
     }
 
     if (mode.list_data)
     {
-        int res = list_contents(mode.dmod_file_in);
-        return res;
+        res &= list_contents(mode.dmod_file_in) << 3;
     }
 
-    if (mode.mode == OpMode::Verify)
+    if (mode.do_verify)
     {
-        int res = verify_mode(mode.dmod_file_in);
-        return res;
+        res &= verify_mode(mode.dmod_file_in) << 4;
     }
 
-    return 0;
+    return res;
 }
 
 param_block parse_get_mode(const std::vector<std::string> &args)
@@ -185,7 +174,7 @@ param_block parse_get_mode(const std::vector<std::string> &args)
                 params.mode = OpMode::Unpack;
                 break;
             case 'e':
-                if (params.mode != OpMode::None && params.mode != OpMode::Encrypt && params.mode != OpMode::Pack)
+                if (params.mode != OpMode::None && params.mode != OpMode::Pack)
                 {
                     println("Multiple modes specified. Can not use 'e' with other modes.");
                     params.should_exit = true;
@@ -194,7 +183,7 @@ param_block parse_get_mode(const std::vector<std::string> &args)
                 params.do_encrypt = true;
                 break;
             case 's':
-                if (params.mode != OpMode::None && params.mode != OpMode::Sign && params.mode != OpMode::Pack)
+                if (params.mode != OpMode::None && params.mode != OpMode::Pack)
                 {
                     println("Multiple modes specified. Can not use 's' with other modes.");
                     params.should_exit = true;
@@ -203,13 +192,7 @@ param_block parse_get_mode(const std::vector<std::string> &args)
                 params.do_sign = true;
                 break;
             case 'v':
-                if (params.mode != OpMode::None && params.mode != OpMode::Verify)
-                {
-                    println("Multiple modes specified. Can not use 'v' with other modes.");
-                    params.should_exit = true;
-                    return params;
-                }
-                params.mode = OpMode::Verify;
+                params.do_verify = true;
                 break;
             case 'l':
                 params.list_data = true;
@@ -226,6 +209,27 @@ param_block parse_get_mode(const std::vector<std::string> &args)
     if (contains_arg(args, "--version"))
     {
         params.mode = OpMode::Version;
+    }
+
+    if (params.do_verify)
+    {
+        if (args.size() < 2)
+        {
+            println("Missing arguments. Usage: dmod-ng v <dmod file>");
+            params.should_exit = true;
+            return params;
+        }
+
+        if (!std::filesystem::exists(args[1]))
+        {
+            println("The file '" + args[1] + "' does not exist");
+            params.should_exit = true;
+            return params;
+        }
+
+        params.dmod_file_in = args[1];
+
+        return params;
     }
 
     if (params.do_sign)
@@ -259,7 +263,7 @@ param_block parse_get_mode(const std::vector<std::string> &args)
 
         if (!std::filesystem::exists(args[1]))
         {
-            println("The file '" + args[1] + "' does not exist");
+            println("The file '" + args[1] + "' does not exit. Can not verify.");
             params.should_exit = true;
             return params;
         }
@@ -332,27 +336,6 @@ param_block parse_get_mode(const std::vector<std::string> &args)
         }
 
         params.files_in = files;
-
-        return params;
-    }
-
-    else if (params.mode == OpMode::Verify)
-    {
-        if (args.size() < 2)
-        {
-            println("Missing arguments. Usage: dmod-ng v <dmod file>");
-            params.should_exit = true;
-            return params;
-        }
-
-        if (!std::filesystem::exists(args[1]))
-        {
-            println("The file '" + args[1] + "' does not exist");
-            params.should_exit = true;
-            return params;
-        }
-
-        params.dmod_file_in = args[1];
 
         return params;
     }
@@ -798,6 +781,11 @@ int inspect_mode(const std::string &dmod_file)
     else
     {
         println("      - Public key: " + to_hexstring(header.crypto.public_key, sizeof(header.crypto.public_key), 20));
+        
+        uint8_t authority[32];
+        dmod_hash(header.crypto.public_key, sizeof(header.crypto.public_key), authority);
+
+        println("      - Authority: " + to_hexstring(authority, sizeof(authority), 19));
     }
 
     if (header.crypto.x509_certificate_offset > 0)
