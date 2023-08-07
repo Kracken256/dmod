@@ -1,5 +1,6 @@
 #include <dmod.h>
 #include <string.h>
+#include <map>
 #include <stdlib.h>
 #include <stdio.h>
 #include <vector>
@@ -9,6 +10,9 @@
 #include <openssl/ssl.h>
 #include <openssl/pem.h>
 #include <zlib.h>
+
+#include <string>
+#include <fstream>
 
 int do_sign(EVP_PKEY *ed_key, const unsigned char *msg, size_t msg_len, uint8_t sig[64])
 {
@@ -107,7 +111,7 @@ void dmod_header_final(struct dmod_header *header)
     header->checksum = dmod_header_checksum(header);
 }
 
-int dmod_add_data(dmod_maker_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size)
+int dmod_add_data(dmod_content_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size)
 {
     dmod_data_item item;
     item.key = nullptr;
@@ -325,7 +329,7 @@ int dmod_decrypt(const void *in, void *out, size_t len, const void *key, const v
     return dmod_encrypt(in, out, len, key, nonce, type);
 }
 
-int dmod_write(dmod_maker_ctx *ctx, const char *path)
+int dmod_write(dmod_content_ctx *ctx, const char *path)
 {
     FILE *outfile = fopen(path, "wb");
 
@@ -444,15 +448,15 @@ int dmod_write(dmod_maker_ctx *ctx, const char *path)
     return 0;
 }
 
-void dmod_set_cipher(dmod_maker_ctx *ctx, DMOD_CIPHER cipher)
+void dmod_set_cipher(dmod_content_ctx *ctx, DMOD_CIPHER cipher)
 {
     ctx->header->crypto.sym_cipher_algo = (uint16_t)cipher;
     ctx->header->data.flags |= DMOD_DATA_ENCRYPT;
 }
 
-dmod_maker_ctx *dmod_ctx_new()
+dmod_content_ctx *dmod_ctx_new()
 {
-    dmod_maker_ctx *ctx = (dmod_maker_ctx *)malloc(sizeof(dmod_maker_ctx));
+    dmod_content_ctx *ctx = (dmod_content_ctx *)malloc(sizeof(dmod_content_ctx));
     ctx->data_offset = 0;
     ctx->crypto_offset = 0;
     ctx->entry_offset = 0;
@@ -469,7 +473,7 @@ dmod_maker_ctx *dmod_ctx_new()
     return ctx;
 }
 
-void dmod_ctx_free(dmod_maker_ctx *ctx)
+void dmod_ctx_free(dmod_content_ctx *ctx)
 {
     if (ctx->data_list)
         free(ctx->data_list);
@@ -481,7 +485,7 @@ void dmod_ctx_free(dmod_maker_ctx *ctx)
         free(ctx);
 }
 
-void dmod_set_key(dmod_maker_ctx *ctx, const uint8_t *key)
+void dmod_set_key(dmod_content_ctx *ctx, const uint8_t *key)
 {
     memcpy(ctx->enc_key, key, sizeof(ctx->enc_key));
 
@@ -493,12 +497,12 @@ void dmod_set_key(dmod_maker_ctx *ctx, const uint8_t *key)
     memcpy(ctx->header->crypto.password_checksum, digest, sizeof(ctx->header->crypto.password_checksum));
 }
 
-void dmod_set_iv(dmod_maker_ctx *ctx, const uint8_t *iv)
+void dmod_set_iv(dmod_content_ctx *ctx, const uint8_t *iv)
 {
     memcpy(ctx->header->crypto.iv, iv, sizeof(ctx->header->crypto.iv));
 }
 
-int dmod_load_private_key_pem_file(dmod_maker_ctx *ctx, const char *path)
+int dmod_load_private_key_pem_file(dmod_content_ctx *ctx, const char *path)
 {
     EVP_PKEY *ed_key = NULL;
     FILE *fp = fopen(path, "r");
@@ -514,7 +518,7 @@ int dmod_load_private_key_pem_file(dmod_maker_ctx *ctx, const char *path)
     return 0;
 }
 
-int dmod_load_private_key_pem(dmod_maker_ctx *ctx, const char *pem)
+int dmod_load_private_key_pem(dmod_content_ctx *ctx, const char *pem)
 {
     EVP_PKEY *ed_key = NULL;
     BIO *bio = BIO_new_mem_buf(pem, -1);
@@ -530,7 +534,7 @@ int dmod_load_private_key_pem(dmod_maker_ctx *ctx, const char *pem)
     return 0;
 }
 
-void dmod_set_data_flags(dmod_maker_ctx *ctx, uint16_t flags)
+void dmod_set_data_flags(dmod_content_ctx *ctx, uint16_t flags)
 {
     ctx->header->data.flags |= flags;
 }
@@ -624,4 +628,135 @@ void dmod_hash(const void *in, size_t len, uint8_t *out)
     EVP_DigestUpdate(mdctx, in, len);
     EVP_DigestFinal_ex(mdctx, out, NULL);
     EVP_MD_CTX_free(mdctx);
+}
+
+int dmod_read_header(struct dmod_header *header, const char *path)
+{
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL)
+    {
+        return 1;
+    }
+
+    size_t bytes_read = fread(header, DMOD_HEADER_SIZE, 1, fp);
+
+    fclose(fp);
+
+    return bytes_read != DMOD_HEADER_SIZE;
+}
+
+int dmod_read_data(dmod_data_item **content, dmod_header *header, const char *path, uint8_t *enc_key)
+{
+    if (dmod_verify_header(header) != 0)
+    {
+        return 1;
+    }
+
+    size_t content_length = header->data.length;
+
+    uint8_t *contents = new uint8_t[content_length];
+
+    size_t bytes_read = 0;
+
+    std::ifstream file(path, std::ios::binary);
+
+    while (file.read((char *)contents + bytes_read, content_length - bytes_read) && bytes_read < content_length)
+    {
+        bytes_read += file.gcount();
+    }
+
+    if (header->data.flags & DMOD_DATA_ENCRYPT)
+    {
+        if (dmod_verify_password(header, enc_key, 32) != 0)
+        {
+            file.close();
+            delete[] contents;
+            return 2;
+        }
+
+        uint8_t *plaintext = new uint8_t[content_length];
+
+        if (dmod_decrypt(contents, plaintext, content_length, enc_key, header->crypto.iv, (DMOD_CIPHER)header->crypto.sym_cipher_algo) != 0)
+        {
+            file.close();
+            delete[] contents;
+            delete[] plaintext;
+            return 3;
+        }
+
+        delete[] contents;
+
+        contents = plaintext;
+
+        uint8_t digest_data[32];
+        if ((file.readsome((char *)digest_data, sizeof(digest_data)) != sizeof(digest_data)))
+        {
+            file.close();
+            delete[] contents;
+            return 4;
+        }
+
+        uint8_t digest_enc[32];
+        uint8_t digest[32];
+        dmod_hash(contents, content_length, digest_enc);
+
+        if (dmod_decrypt(digest_enc, digest, 32, enc_key, header->crypto.iv, (DMOD_CIPHER)header->crypto.sym_cipher_algo) != 0)
+        {
+            file.close();
+            delete[] contents;
+            return 5;
+        }
+
+        if (memcmp(digest, digest_data, sizeof(digest)) != 0)
+        {
+            file.close();
+            delete[] contents;
+            return 6;
+        }
+    }
+
+    if (header->data.flags & DMOD_DATA_COMPRESS_MASK)
+    {
+        uint8_t *decompressed;
+        size_t decompressed_size;
+        if (xpress_buffer(contents, &decompressed, content_length, &decompressed_size, 1, (DMOD_COMPRESSOR)(header->data.flags & DMOD_DATA_COMPRESS_MASK)) != 0)
+        {
+            file.close();
+            delete[] contents;
+            return 7;
+        }
+
+        delete[] contents;
+
+        contents = decompressed;
+        content_length = decompressed_size;
+    }
+
+    file.close();
+
+    size_t pos = 0;
+    size_t inner_data_length = 0;
+
+    do
+    {
+        uint64_t key_len = *(uint64_t *)&contents[pos];
+        pos += sizeof(uint64_t);
+        uint64_t val_len = *(uint64_t *)&contents[pos];
+        pos += sizeof(uint64_t);
+
+        pos += key_len + val_len;
+
+        inner_data_length += sizeof(uint64_t) + sizeof(uint64_t) + key_len + val_len;
+
+    } while (pos < content_length);
+
+    if (inner_data_length != content_length)
+    {
+        delete[] contents;
+        return 8;
+    }
+
+    *content = (struct dmod_data_item *)contents;
+
+    return 0;
 }

@@ -64,7 +64,7 @@ extern "C"
         uint32_t checksum;
     } __attribute__((packed));
 
-    struct dmod_maker_ctx
+    struct dmod_content_ctx
     {
         struct dmod_header *header;
         uint32_t data_offset;
@@ -173,53 +173,77 @@ extern "C"
     /// @param value Metadata value
     /// @param value_size Metadata value size in bytes
     /// @return 0 if the data item was added, 1 otherwise
-    int dmod_add_data(struct dmod_maker_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size);
+    int dmod_add_data(struct dmod_content_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size);
 
     /// @brief Write finalized DMOD module to a file
     /// @param ctx DMOD maker context
     /// @param path Path to write the DMOD module to
     /// @return 0 if the DMOD module was written, 1 otherwise
-    int dmod_write(struct dmod_maker_ctx *ctx, const char *path);
+    int dmod_write(struct dmod_content_ctx *ctx, const char *path);
+
+    /// @brief Read a DMOD module header. Does not verify the header
+    /// @param header DMOD header to read
+    /// @param path Path to the DMOD module
+    /// @return 0 if the DMOD module header was read, 1 otherwise
+    int dmod_read_header(struct dmod_header *header, const char *path);
+
+    /// @brief Read a DMOD module data section (including all content)
+    /// @param content malloc'd array of content items
+    /// @param header DMOD header
+    /// @param path Path to the DMOD module
+    /// @param enc_key 32 byte encryption. If NULL, no decryption is performed
+    /// @return 0 if the DMOD module data section was read, else > 0
+    /// @note The caller is responsible for freeing the content array
+    /// @note If compression is used, the content will be decompressed based on the header
+    int dmod_read_data(struct dmod_data_item *content, dmod_header *header, const char *path, uint8_t *enc_key);
+
+    /// @brief Read a DMOD module data item
+    /// @param content DMOD data item to read
+    /// @param header DMOD header
+    /// @param path Path to the DMOD module
+    /// @param key Data item key
+    /// @param key_size Data item key size in bytes
+    int dmod_read_data_item(struct dmod_data_item *content, dmod_header *header, const char *path, const char *key, size_t key_size);
 
     /// @brief Set the symetric stream cipher to use
     /// @param ctx DMOD maker context
     /// @param cipher Symetric stream cipher to use
-    void dmod_set_cipher(struct dmod_maker_ctx *ctx, DMOD_CIPHER cipher);
+    void dmod_set_cipher(struct dmod_content_ctx *ctx, DMOD_CIPHER cipher);
 
     /// @brief Initialize a DMOD maker context with default values
     /// @return A DMOD maker context
-    struct dmod_maker_ctx *dmod_ctx_new(void);
+    struct dmod_content_ctx *dmod_ctx_new(void);
 
     /// @brief Free a DMOD maker context
     /// @param ctx DMOD maker context to free
-    void dmod_ctx_free(struct dmod_maker_ctx *ctx);
+    void dmod_ctx_free(struct dmod_content_ctx *ctx);
 
     /// @brief Set the symetric stream cipher key
     /// @param ctx DMOD maker context
     /// @param key 32 byte key
-    void dmod_set_key(struct dmod_maker_ctx *ctx, const uint8_t *key);
+    void dmod_set_key(struct dmod_content_ctx *ctx, const uint8_t *key);
 
     /// @brief Set the symetric stream cipher nonce
     /// @param ctx DMOD maker context
     /// @param nonce 16 byte nonce (must be 16 bytes)
-    void dmod_set_iv(struct dmod_maker_ctx *ctx, const uint8_t *nonce);
+    void dmod_set_iv(struct dmod_content_ctx *ctx, const uint8_t *nonce);
 
     /// @brief Set the Ed25519 private key PEM file path
     /// @param ctx DMOD maker context
     /// @param path Path to the Ed25519 private key PEM file
     /// @return 0 if the Ed25519 private key PEM file was loaded, 1 otherwise
-    int dmod_load_private_key_pem_file(struct dmod_maker_ctx *ctx, const char *path);
+    int dmod_load_private_key_pem_file(struct dmod_content_ctx *ctx, const char *path);
 
     /// @brief Set the Ed25519 private key PEM
     /// @param ctx DMOD maker context
     /// @param pem NULL terminated string containing the Ed25519 private key PEM
     /// @return 0 if the Ed25519 private key PEM was loaded, 1 otherwise
-    int dmod_load_private_key_pem(struct dmod_maker_ctx *ctx, const char *pem);
+    int dmod_load_private_key_pem(struct dmod_content_ctx *ctx, const char *pem);
 
     /// @brief Set a flag in the data section
     /// @param ctx DMOD maker context
     /// @param flags Flags to set
-    void dmod_set_data_flags(struct dmod_maker_ctx *ctx, uint16_t flags);
+    void dmod_set_data_flags(struct dmod_content_ctx *ctx, uint16_t flags);
 
     /// @brief Verify a key matches the password checksum
     /// @param header DMOD header

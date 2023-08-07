@@ -1107,7 +1107,7 @@ int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_ou
 
     dmod_lib_init();
 
-    struct dmod_maker_ctx *ctx = dmod_ctx_new();
+    struct dmod_content_ctx *ctx = dmod_ctx_new();
     dmod_set_data_flags(ctx, DMOD_COMPRESSOR_ZLIB);
 
     if (do_encrypt)
