@@ -56,6 +56,8 @@ int inspect_mode(const std::string &dmod_file);
 
 int list_contents(const std::string &dmod_file);
 
+int unpack_mode(const std::string &dmod_file, const std::string &out_dir, bool verify = false);
+
 int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_out, bool do_encrypt = false, bool do_sign = false, std::string keyfile = "", bool do_compress = false);
 
 int verify_mode(std::string dmod_file);
@@ -84,6 +86,7 @@ int main(int argc, char *argv[])
         println("dmod-ng version " + to_version(DMOD_VERSION));
         return 0;
     }
+    dmod_lib_init();
 
     int res = 0;
 
@@ -97,14 +100,18 @@ int main(int argc, char *argv[])
         res &= pack_mode(mode.files_in, mode.dmod_file_out, mode.do_encrypt, mode.do_sign, mode.signkey_file, mode.do_compress) << 2;
     }
 
-    if (mode.list_data)
+    if (mode.mode == OpMode::Unpack)
     {
-        res &= list_contents(mode.dmod_file_in) << 3;
+        res &= unpack_mode(mode.dmod_file_in, mode.dmod_file_out, mode.do_verify) << 3;
     }
-
-    if (mode.do_verify)
+    else if (mode.do_verify)
     {
         res &= verify_mode(mode.dmod_file_in) << 4;
+    }
+
+    if (mode.list_data)
+    {
+        res &= list_contents(mode.dmod_file_in) << 5;
     }
 
     return res;
@@ -228,8 +235,6 @@ param_block parse_get_mode(const std::vector<std::string> &args)
         }
 
         params.dmod_file_in = args[1];
-
-        return params;
     }
 
     if (params.do_sign)
@@ -336,6 +341,27 @@ param_block parse_get_mode(const std::vector<std::string> &args)
         }
 
         params.files_in = files;
+
+        return params;
+    }
+    else if (params.mode == OpMode::Unpack)
+    {
+        if (args.size() < 3)
+        {
+            println("Missing input file. Usage: dmod-ng x <file> <output dir>");
+            params.should_exit = true;
+            return params;
+        }
+
+        if (!std::filesystem::exists(args[1]))
+        {
+            println("The file '" + args[1] + "' does not exist");
+            params.should_exit = true;
+            return params;
+        }
+
+        params.dmod_file_in = args[1];
+        params.dmod_file_out = args[2];
 
         return params;
     }
@@ -781,11 +807,12 @@ int inspect_mode(const std::string &dmod_file)
     else
     {
         println("      - Public key: " + to_hexstring(header.crypto.public_key, sizeof(header.crypto.public_key), 20));
-        
-        uint8_t authority[32];
-        dmod_hash(header.crypto.public_key, sizeof(header.crypto.public_key), authority);
 
-        println("      - Authority: " + to_hexstring(authority, sizeof(authority), 19));
+        uint8_t authority[32];
+        if (dmod_get_authority(dmod_file.c_str(), authority) == 0)
+        {
+            println("      - Authority: " + to_hexstring(authority, sizeof(authority), 19));
+        }
     }
 
     if (header.crypto.x509_certificate_offset > 0)
@@ -974,9 +1001,20 @@ std::vector<std::string> get_files_recursive(const std::string &path)
     if (!std::filesystem::exists(path))
         return files;
 
+    char *cwd = getcwd(nullptr, 0);
+
     if (std::filesystem::is_regular_file(path))
     {
-        files.push_back(path);
+        if (path.starts_with(cwd))
+        {
+            std::string relative_path = path.substr(strlen(cwd) + 1);
+            files.push_back(relative_path);
+        }
+        else
+        {
+            files.push_back(path);
+        }
+        free(cwd);
         return files;
     }
 
@@ -1007,7 +1045,15 @@ std::vector<std::string> get_files_recursive(const std::string &path)
                     continue;
                 }
 
-                files.push_back(entry.path().string());
+                if (entry.path().string().starts_with(cwd))
+                {
+                    std::string relative_path = entry.path().string().substr(strlen(cwd) + 1);
+                    files.push_back(relative_path);
+                }
+                else
+                {
+                    files.push_back(entry.path().string());
+                }
             }
         }
     }
@@ -1016,14 +1062,14 @@ std::vector<std::string> get_files_recursive(const std::string &path)
         println("Error: " + std::string(e.what()));
     }
 
+    free(cwd);
+
     return files;
 }
 
 int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_out, bool do_encrypt, bool do_sign, std::string keyfile, bool do_compress)
 {
     println("Packing files into " + dmod_file_out);
-
-    dmod_lib_init();
 
     struct dmod_content_ctx *ctx = dmod_ctx_new();
 
@@ -1167,5 +1213,153 @@ int verify_mode(std::string dmod_file)
     dmod_hash(header.crypto.public_key, 32, authority);
 
     println("\nAuthority: " + to_hexstring(authority, 32, 11));
+    return 0;
+}
+
+int unpack_mode(const std::string &dmod_file, const std::string &out_dir, bool verify)
+{
+    println("Unpacking " + dmod_file + " to " + out_dir);
+
+    if (verify && verify_mode(dmod_file) != 0)
+    {
+        println("Unable to verify signature. Aborting.");
+        return 1;
+    }
+
+    struct dmod_header header;
+
+    if (dmod_read_header(&header, dmod_file.c_str()) != 0)
+    {
+        println("Error: Unable to read header from file.");
+        return 1;
+    }
+
+    uint8_t enc_key[32];
+
+    if (header.data.flags & DMOD_DATA_ENCRYPT)
+    {
+        std::string password = get_password("Enter password: ");
+
+        dmod_derive_key((uint8_t *)password.c_str(), password.length(), enc_key);
+    }
+
+    struct dmod_data_item *items;
+
+    int err = dmod_read_data(&items, &header, dmod_file.c_str(), enc_key);
+
+    switch (err)
+    {
+    case 0:
+        break;
+    case 1:
+        println("Failed to read file header");
+        return 1;
+    case 2:
+        println("Error: Password is incorrect");
+        return 1;
+    case 3:
+        println("Error: Decryption failed");
+        return 1;
+    case 4:
+        println("Failed to read digest from file");
+        return 1;
+    case 5:
+        println("Failed to decrypt file digest");
+        return 1;
+    case 6:
+        println("Failed to verify file digest. File has been tampered with");
+        return 1;
+    case 7:
+        println("Failed to decompress file");
+        return 1;
+    default:
+        println("Failed to read DMOD data");
+        println("Error: " + std::to_string(err));
+        return 1;
+    }
+
+    std::map<std::string, std::string> data;
+
+    for (size_t i = 0; i < header.data.count; i++)
+    {
+        struct dmod_data_item *item = &items[i];
+
+        std::string key((char *)item->key, item->keysize);
+        std::string value((char *)item->value, item->valuesize);
+
+        data[key] = value;
+
+        delete[] item->key;
+        delete[] item->value;
+    }
+
+    delete[] items;
+
+    if (!std::filesystem::exists(out_dir))
+    {
+        std::filesystem::create_directory(out_dir);
+    }
+
+    std::string index_file_content;
+
+    for (auto &pair : data)
+    {
+        std::string file_name = pair.first;
+        const std::string &file_content = pair.second;
+
+        std::filesystem::path path(file_name);
+        std::filesystem::path canonicalPath = std::filesystem::weakly_canonical(path).make_preferred();
+
+        char *cwd = getcwd(NULL, 0);
+        if (cwd == NULL)
+        {
+            println("Error: Unable to get current working directory");
+            return 1;
+        }
+
+        if (canonicalPath.string().starts_with(cwd))
+        {
+            canonicalPath = canonicalPath.string().substr(strlen(cwd) + 1);
+        }
+
+        free(cwd);
+
+        std::filesystem::path out_path = out_dir / canonicalPath;
+
+        std::cout << "  - Writing file " << out_path << std::endl;
+
+        std::filesystem::create_directories(out_path.parent_path());
+
+        std::ofstream file(out_path, std::ios::binary);
+
+        if (!file.is_open())
+        {
+            println("Error: Unable to open file " + out_path.string());
+            return 1;
+        }
+
+        file.write(file_content.c_str(), file_content.length());
+
+        file.close();
+
+        index_file_content += file_name + "\n";
+    }
+
+    std::filesystem::path index_file_path = out_dir + "/manifest.txt";
+
+    std::cout << "  - Writing file " << index_file_path << std::endl;
+
+    std::ofstream index_file(index_file_path, std::ios::binary);
+
+    if (!index_file.is_open())
+    {
+        println("Error: Unable to open file " + index_file_path.string());
+        return 1;
+    }
+
+    index_file.write(index_file_content.c_str(), index_file_content.length());
+
+    index_file.close();
+
     return 0;
 }

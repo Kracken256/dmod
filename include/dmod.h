@@ -1,4 +1,25 @@
-#pragma once
+/*
+
+Copywrite (C) 2023 Wesley Jones.
+
+All rights reserved.
+
+ /$$   /$$           /$$ /$$                  /$$$$$$
+| $$  | $$          | $$|__/                 /$$__  $$
+| $$  | $$  /$$$$$$ | $$ /$$ /$$   /$$      | $$  \__/  /$$$$$$   /$$$$$$  /$$   /$$  /$$$$$$
+| $$$$$$$$ /$$__  $$| $$| $$|  $$ /$$/      | $$ /$$$$ /$$__  $$ /$$__  $$| $$  | $$ /$$__  $$
+| $$__  $$| $$$$$$$$| $$| $$ \  $$$$/       | $$|_  $$| $$  \__/| $$  \ $$| $$  | $$| $$  \ $$
+| $$  | $$| $$_____/| $$| $$  >$$  $$       | $$  \ $$| $$      | $$  | $$| $$  | $$| $$  | $$
+| $$  | $$|  $$$$$$$| $$| $$ /$$/\  $$      |  $$$$$$/| $$      |  $$$$$$/|  $$$$$$/| $$$$$$$/
+|__/  |__/ \_______/|__/|__/|__/  \__/       \______/ |__/       \______/  \______/ | $$____/
+                                                                                    | $$
+                                                                                    | $$
+                                                                                    |__/
+
+*/
+
+#ifndef _DMOD_H
+#define _DMOD_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -153,11 +174,6 @@ extern "C"
     /// @return The 32 bit checksum of the header
     uint32_t dmod_header_checksum(const struct dmod_header *header);
 
-    /// @brief Verify the header is valid
-    /// @param header DMOD header to verify
-    /// @return 0 if the header is valid, 1 otherwise
-    int dmod_verify_header(const struct dmod_header *header);
-
     /// @brief Initialize a DMOD header with default values
     /// @param header DMOD header to initialize. Does not allocate
     void dmod_header_init(struct dmod_header *header);
@@ -166,20 +182,38 @@ extern "C"
     /// @param header DMOD header to finalize
     void dmod_header_final(struct dmod_header *header);
 
-    /// @brief Add a data item to the data section
-    /// @param ctx DMOD maker context
-    /// @param key Metadata key
-    /// @param key_size Metadata key size in bytes
-    /// @param value Metadata value
-    /// @param value_size Metadata value size in bytes
-    /// @return 0 if the data item was added, 1 otherwise
-    int dmod_add_data(struct dmod_content_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size);
+    /// @brief Verify the header is valid
+    /// @param header DMOD header to verify
+    /// @return 0 if the header is valid, 1 otherwise
+    int dmod_verify_header(const struct dmod_header *header);
 
-    /// @brief Write finalized DMOD module to a file
+    /// @brief Initialize a DMOD maker context with default values
+    /// @return A DMOD maker context
+    struct dmod_content_ctx *dmod_ctx_new(void);
+
+    /// @brief Free a DMOD maker context
+    /// @param ctx DMOD maker context to free
+    void dmod_ctx_free(struct dmod_content_ctx *ctx);
+
+    /// @brief Set the symetric stream cipher to use
     /// @param ctx DMOD maker context
-    /// @param path Path to write the DMOD module to
-    /// @return 0 if the DMOD module was written, 1 otherwise
-    int dmod_write(struct dmod_content_ctx *ctx, const char *path);
+    /// @param cipher Symetric stream cipher to use
+    void dmod_set_cipher(struct dmod_content_ctx *ctx, DMOD_CIPHER cipher);
+
+    /// @brief Set the symetric stream cipher key
+    /// @param ctx DMOD maker context
+    /// @param key 32 byte key
+    void dmod_set_key(struct dmod_content_ctx *ctx, const uint8_t *key);
+
+    /// @brief Set the symetric stream cipher nonce
+    /// @param ctx DMOD maker context
+    /// @param nonce 16 byte nonce (must be 16 bytes)
+    void dmod_set_iv(struct dmod_content_ctx *ctx, const uint8_t *nonce);
+
+    /// @brief Set a flag in the data section
+    /// @param ctx DMOD maker context
+    /// @param flags Flags to set
+    void dmod_set_data_flags(struct dmod_content_ctx *ctx, uint16_t flags);
 
     /// @brief Read a DMOD module header. Does not verify the header
     /// @param header DMOD header to read
@@ -207,29 +241,6 @@ extern "C"
     /// @return 0 if the DMOD module data item was read, else > 0
     int dmod_read_data_item(struct dmod_data_item *content, dmod_header *header, const char *path, const char *key, size_t key_size, uint8_t *enc_key);
 
-    /// @brief Set the symetric stream cipher to use
-    /// @param ctx DMOD maker context
-    /// @param cipher Symetric stream cipher to use
-    void dmod_set_cipher(struct dmod_content_ctx *ctx, DMOD_CIPHER cipher);
-
-    /// @brief Initialize a DMOD maker context with default values
-    /// @return A DMOD maker context
-    struct dmod_content_ctx *dmod_ctx_new(void);
-
-    /// @brief Free a DMOD maker context
-    /// @param ctx DMOD maker context to free
-    void dmod_ctx_free(struct dmod_content_ctx *ctx);
-
-    /// @brief Set the symetric stream cipher key
-    /// @param ctx DMOD maker context
-    /// @param key 32 byte key
-    void dmod_set_key(struct dmod_content_ctx *ctx, const uint8_t *key);
-
-    /// @brief Set the symetric stream cipher nonce
-    /// @param ctx DMOD maker context
-    /// @param nonce 16 byte nonce (must be 16 bytes)
-    void dmod_set_iv(struct dmod_content_ctx *ctx, const uint8_t *nonce);
-
     /// @brief Set the Ed25519 private key PEM file path
     /// @param ctx DMOD maker context
     /// @param path Path to the Ed25519 private key PEM file
@@ -254,17 +265,27 @@ extern "C"
     /// @return 0 if the Ed25519 public key PEM was loaded, 1 otherwise
     int dmod_load_public_key_pem(struct dmod_content_ctx *ctx, const char *pem);
 
-    /// @brief Set a flag in the data section
+    /// @brief Add a data item to the data section
     /// @param ctx DMOD maker context
-    /// @param flags Flags to set
-    void dmod_set_data_flags(struct dmod_content_ctx *ctx, uint16_t flags);
+    /// @param key Metadata key
+    /// @param key_size Metadata key size in bytes
+    /// @param value Metadata value
+    /// @param value_size Metadata value size in bytes
+    /// @return 0 if the data item was added, 1 otherwise
+    int dmod_add_data(struct dmod_content_ctx *ctx, const char *key, size_t key_size, const char *value, size_t value_size);
+
+    /// @brief Write finalized DMOD module to a file
+    /// @param ctx DMOD maker context
+    /// @param path Path to write the DMOD module to
+    /// @return 0 if the DMOD module was written, 1 otherwise
+    int dmod_write(struct dmod_content_ctx *ctx, const char *path);
 
     /// @brief Verify a key matches the password checksum
     /// @param header DMOD header
     /// @param key Key to verify
     /// @param key_size Key size in bytes
     /// @return 0 if the key matches the password checksum, 1 otherwise
-    int dmod_verify_password(const struct dmod_header *header, const uint8_t *key, size_t key_size);
+    int dmod_verify_key(const struct dmod_header *header, const uint8_t key[32]);
 
     /// @brief Encrypt a buffer with a symetric stream cipher
     /// @param in Input buffer
@@ -300,13 +321,21 @@ extern "C"
     /// @param password Password to derive the key from
     /// @param len Length of the password
     /// @param outkey Pointer to store the derived 32 byte key
+    /// @note Uses the SHA256 hash function
     void dmod_derive_key(const void *inkey, size_t len, uint8_t *outkey);
 
     /// @brief DMOD standard hash function
     /// @param in Input buffer
     /// @param len Length of the input buffer
     /// @param out 32 byte output buffer
+    /// @note Uses the SHA256 hash function
     void dmod_hash(const void *in, size_t len, uint8_t *out);
+
+    /// @brief DMOD retrieves the DMOD authority from a DMOD module
+    /// @param module_path Path to the DMOD module
+    /// @param authority 32 byte buffer to store the DMOD authority
+    /// @return 0 if the DMOD authority was retrieved, 1 otherwise
+    int dmod_get_authority(const char *module_path, uint8_t *authority);
 
     /// @brief DMOD Verify a DMOD module signature with an Ed25519 public key
     /// @param header DMOD context previously loaded with the header
@@ -314,6 +343,14 @@ extern "C"
     /// @return 0 if the DMOD module signature was verified, 1 otherwise
     int dmod_verify_signature(const char *module_path);
 
+    /// @brief DMOD Verify a DMOD module signature was made by a trusted authority
+    /// @param module_path Path to the DMOD module
+    /// @param public_key Authority = SHA256(raw Ed25519 public key)
+    /// @return 0 if the DMOD module signature was verified, 1 otherwise
+    int dmod_verify_authority(const char *module_path, const uint8_t *authority);
+
 #ifdef __cplusplus
 }
+#endif
+
 #endif

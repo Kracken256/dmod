@@ -1,5 +1,5 @@
 CC = g++
-CXXFLAGS = -Iinclude -lz  -g
+CXXFLAGS = -Iinclude -lz  -g -std=c++20 
 
 SOURCES = $(shell find source -name '*.cpp' -printf '%P\n' -not -name 'dmod-ng.cpp')
 OBJDIR = obj
@@ -26,4 +26,10 @@ $(OBJDIR)/%.obj: source/%.cpp
 clean:
 	@rm -rf $(OBJDIR) $(BUILD_DIR)
 
-.PHONY: all clean
+install:
+	@cp $(BUILD_DIR)/libdmod.a /usr/local/lib
+	@cp include/dmod.h /usr/local/include
+	@cp $(BUILD_DIR)/dmod /usr/local/bin
+	@echo "Installed dmod-ng"
+
+.PHONY: all clean install

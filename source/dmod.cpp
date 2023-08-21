@@ -1,14 +1,11 @@
 #include <dmod.h>
 #include <string.h>
-#include <map>
 #include <stdlib.h>
 #include <stdio.h>
 #include <vector>
 #include <assert.h>
-#include <openssl/aes.h>
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
-#include <openssl/err.h>
 #include <openssl/pem.h>
 #include <zlib.h>
 
@@ -334,6 +331,11 @@ int dmod_write(dmod_content_ctx *ctx, const char *path)
 {
     FILE *outfile = fopen(path, "wb");
 
+    if (outfile == nullptr)
+    {
+        return 1;
+    }
+
     ctx->data_offset = DMOD_HEADER_SIZE;
 
     fwrite(ctx->header, DMOD_HEADER_SIZE, 1, outfile);
@@ -365,17 +367,10 @@ int dmod_write(dmod_content_ctx *ctx, const char *path)
 
         uint8_t *compressed = nullptr;
         size_t compressed_size = 0;
-        if (ctx->header->data.flags & DMOD_DATA_COMPRESS_MASK)
-            printf("Compressing data...\n");
-        printf("Data size: %lu\n", buffer_size);
         if (xpress_buffer(plaintext_buffer, (uint8_t **)&compressed, buffer_size, &compressed_size, 0, (DMOD_COMPRESSOR)(ctx->header->data.flags & DMOD_DATA_COMPRESS_MASK)) != 0)
         {
-            printf("Failed to compress data\n");
-            exit(1);
+            return 1;
         }
-
-        if (ctx->header->data.flags & DMOD_DATA_COMPRESS_MASK)
-            printf("Compressed data from %lu to %lu\n", buffer_size, compressed_size);
 
         // Calc the sha256 hash of the data
         uint8_t digest[32];
@@ -384,7 +379,6 @@ int dmod_write(dmod_content_ctx *ctx, const char *path)
 
         if (dmod_encrypt(compressed, ciphertext, compressed_size, ctx->enc_key, ctx->header->crypto.iv, (DMOD_CIPHER)ctx->header->crypto.sym_cipher_algo))
         {
-            printf("Failed to encrypt data\n");
             return 1;
         }
 
@@ -407,7 +401,6 @@ int dmod_write(dmod_content_ctx *ctx, const char *path)
             EVP_PKEY_get_raw_public_key(pkey, nullptr, &pubkey_size);
             if (pubkey_size != 32)
             {
-                printf("Invalid public key size\n");
                 return 1;
             }
 
@@ -418,12 +411,7 @@ int dmod_write(dmod_content_ctx *ctx, const char *path)
             uint8_t signature[64];
             if (do_sign(pkey, digest, 32, signature) != 0)
             {
-                printf("Failed to sign data\n");
                 return 1;
-            }
-            else
-            {
-                printf("Signed data\n");
             }
 
             memcpy(ctx->header->crypto.digital_signature, signature, 64);
@@ -540,16 +528,15 @@ void dmod_set_data_flags(dmod_content_ctx *ctx, uint16_t flags)
 int dmod_lib_init()
 {
     OpenSSL_add_all_algorithms();
-    ERR_load_crypto_strings();
 
     return 0;
 }
 
-int dmod_verify_password(const dmod_header *header, const uint8_t *key, size_t key_size)
+int dmod_verify_key(const struct dmod_header *header, const uint8_t key[32])
 {
     uint8_t digest[32];
 
-    dmod_hash(key, key_size, digest);
+    dmod_hash(key, 32, digest);
 
     return memcmp(digest, header->crypto.password_checksum, sizeof(header->crypto.password_checksum)) != 0;
 }
@@ -667,7 +654,7 @@ int dmod_read_data(dmod_data_item **content, dmod_header *header, const char *pa
 
     if (header->data.flags & DMOD_DATA_ENCRYPT)
     {
-        if (dmod_verify_password(header, enc_key, 32) != 0)
+        if (dmod_verify_key(header, enc_key) != 0)
         {
             file.close();
             delete[] contents;
@@ -727,7 +714,28 @@ int dmod_read_data(dmod_data_item **content, dmod_header *header, const char *pa
     }
 
     file.close();
+
     size_t raw_pos = 0;
+    size_t total_size = 0;
+
+    for (size_t i = 0; i < header->data.count; i++)
+    {
+        uint64_t keysize = *(uint64_t *)(contents + raw_pos);
+        raw_pos += sizeof(uint64_t);
+
+        uint64_t valuesize = *(uint64_t *)(contents + raw_pos);
+        raw_pos += sizeof(uint64_t);
+
+        raw_pos += keysize + valuesize;
+    }
+
+    if (raw_pos != content_length)
+    {
+        delete[] contents;
+        return 5;
+    }
+
+    raw_pos = 0;
 
     struct dmod_data_item *content_items = new struct dmod_data_item[header->data.count];
 
@@ -778,11 +786,31 @@ int dmod_read_data_item(dmod_data_item *item, dmod_header *header, const char *p
 
     if (header->data.flags & DMOD_DATA_ENCRYPT)
     {
-        if (dmod_verify_password(header, enc_key, 32) != 0)
+        if (dmod_verify_key(header, enc_key) != 0)
         {
             file.close();
             delete[] contents;
             return 2;
+        }
+
+        file.seekg(-32, std::ios::end);
+
+        uint8_t digest_data[32];
+        if ((file.readsome((char *)digest_data, sizeof(digest_data)) != sizeof(digest_data)))
+        {
+            file.close();
+            delete[] contents;
+            return 4;
+        }
+
+        uint8_t digest[32];
+        dmod_hash(contents, content_length, digest);
+
+        if (memcmp(digest, digest_data, sizeof(digest)) != 0)
+        {
+            file.close();
+            delete[] contents;
+            return 6;
         }
 
         uint8_t *plaintext = new uint8_t[content_length];
@@ -799,31 +827,31 @@ int dmod_read_data_item(dmod_data_item *item, dmod_header *header, const char *p
 
         contents = plaintext;
 
-        uint8_t digest_data[32];
-        if ((file.readsome((char *)digest_data, sizeof(digest_data)) != sizeof(digest_data)))
-        {
-            file.close();
-            delete[] contents;
-            return 4;
-        }
+        // uint8_t digest_data[32];
+        // if ((file.readsome((char *)digest_data, sizeof(digest_data)) != sizeof(digest_data)))
+        // {
+        //     file.close();
+        //     delete[] contents;
+        //     return 4;
+        // }
 
-        uint8_t digest_enc[32];
-        uint8_t digest[32];
-        dmod_hash(contents, content_length, digest_enc);
+        // uint8_t digest_enc[32];
+        // uint8_t digest[32];
+        // dmod_hash(contents, content_length, digest_enc);
 
-        if (dmod_decrypt(digest_enc, digest, 32, enc_key, header->crypto.iv, (DMOD_CIPHER)header->crypto.sym_cipher_algo) != 0)
-        {
-            file.close();
-            delete[] contents;
-            return 5;
-        }
+        // // if (dmod_decrypt(digest_enc, digest, 32, enc_key, header->crypto.iv, (DMOD_CIPHER)header->crypto.sym_cipher_algo) != 0)
+        // // {
+        // //     file.close();
+        // //     delete[] contents;
+        // //     return 5;
+        // // }
 
-        if (memcmp(digest, digest_data, sizeof(digest)) != 0)
-        {
-            file.close();
-            delete[] contents;
-            return 6;
-        }
+        // if (memcmp(digest, digest_data, sizeof(digest)) != 0)
+        // {
+        //     file.close();
+        //     delete[] contents;
+        //     return 6;
+        // }
     }
 
     if (header->data.flags & DMOD_DATA_COMPRESS_MASK)
@@ -930,6 +958,39 @@ int dmod_load_public_key_pem(dmod_content_ctx *ctx, const char *pem)
 
 int dmod_verify_signature(const char *module_path)
 {
+    return dmod_verify_authority(module_path, NULL);
+}
+
+int dmod_get_authority(const char *module_path, uint8_t *authority)
+{
+    struct dmod_header header;
+
+    if (dmod_read_header(&header, module_path) != 0)
+    {
+        return 1;
+    }
+
+    if (dmod_verify_header(&header) != 0)
+    {
+        return 2;
+    }
+
+    uint8_t cmpbuf[32];
+    memset(cmpbuf, 0, 32);
+
+    if (memcmp(header.crypto.public_key, cmpbuf, 32) == 0)
+    {
+        return 3;
+    }
+
+    memcpy(authority, header.crypto.public_key, 32);
+    dmod_hash(authority, 32, authority);
+
+    return 0;
+}
+
+int dmod_verify_authority(const char *module_path, const uint8_t *authority)
+{
     struct dmod_header header;
 
     if (dmod_read_header(&header, module_path) != 0)
@@ -951,6 +1012,18 @@ int dmod_verify_signature(const char *module_path)
     if (!ed_key)
     {
         return 4;
+    }
+
+    if (authority != NULL)
+    {
+        uint8_t authority_check[32];
+        dmod_hash(header.crypto.public_key, 32, authority_check);
+
+        if (memcmp(authority, authority_check, 32) != 0)
+        {
+            EVP_PKEY_free(ed_key);
+            return 3;
+        }
     }
 
     std::ifstream file(module_path, std::ios::binary);
