@@ -40,6 +40,7 @@ struct param_block
     bool do_sign;
     bool do_compress;
     bool do_verify;
+    bool verbose;
 };
 
 void println(std::string msg = "");
@@ -58,7 +59,7 @@ int list_contents(const std::string &dmod_file);
 
 int unpack_mode(const std::string &dmod_file, const std::string &out_dir, bool verify = false);
 
-int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_out, bool do_encrypt = false, bool do_sign = false, std::string keyfile = "", bool do_compress = false);
+int pack_mode(const param_block &params);
 
 int verify_mode(std::string dmod_file);
 
@@ -97,7 +98,7 @@ int main(int argc, char *argv[])
 
     if (mode.mode == OpMode::Pack)
     {
-        res &= pack_mode(mode.files_in, mode.dmod_file_out, mode.do_encrypt, mode.do_sign, mode.signkey_file, mode.do_compress) << 2;
+        res &= pack_mode(mode) << 2;
     }
 
     if (mode.mode == OpMode::Unpack)
@@ -203,6 +204,9 @@ param_block parse_get_mode(const std::vector<std::string> &args)
                 break;
             case 'l':
                 params.list_data = true;
+                break;
+            case 'n':
+                params.verbose = true;
                 break;
             }
         }
@@ -442,6 +446,7 @@ void print_help()
     println("  s: Add digital signature");
     println("  v: Verify the module's signature");
     println("  l: List data");
+    println("  n: Print verbose output");
     println();
 
     println("  --sign-key [path]: The private key to sign the module with");
@@ -1067,16 +1072,17 @@ std::vector<std::string> get_files_recursive(const std::string &path)
     return files;
 }
 
-int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_out, bool do_encrypt, bool do_sign, std::string keyfile, bool do_compress)
+int pack_mode(const param_block &param)
 {
-    println("Packing files into " + dmod_file_out);
+    if (param.verbose)
+        println("Packing files into " + param.dmod_file_out);
 
     struct dmod_content_ctx *ctx = dmod_ctx_new();
 
-    if (do_compress)
+    if (param.do_compress)
         dmod_set_data_flags(ctx, DMOD_COMPRESSOR_ZLIB);
 
-    if (do_encrypt)
+    if (param.do_encrypt)
     {
         uint8_t enc_key[32];
         uint8_t enc_iv[16];
@@ -1099,19 +1105,19 @@ int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_ou
         dmod_set_iv(ctx, enc_iv);
     }
 
-    if (do_sign)
+    if (param.do_sign)
     {
-        if (dmod_load_private_key_pem_file(ctx, keyfile.c_str()) != 0)
+        if (dmod_load_private_key_pem_file(ctx, param.signkey_file.c_str()) != 0)
         {
-            println("Error: Could not load private key file " + keyfile);
+            println("Error: Could not load private key file " + param.signkey_file);
             dmod_ctx_free(ctx);
             return 1;
         }
     }
 
-    for (const std::string &file_name : files_in)
+    for (const std::string &file_name : param.files_in)
     {
-        if (file_name == dmod_file_out)
+        if (file_name == param.dmod_file_out)
         {
             println("Error: Input file cannot be the same as the output file");
             dmod_ctx_free(ctx);
@@ -1126,7 +1132,8 @@ int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_ou
             continue;
         }
 
-        println("  - Adding file " + file_name);
+        if (param.verbose)
+            println("  - Adding file " + file_name);
 
         std::streamsize size = file.tellg();
         file.seekg(0, std::ios::beg);
@@ -1147,11 +1154,12 @@ int pack_mode(std::vector<std::string> files_in, const std::string &dmod_file_ou
 
     dmod_header_final(ctx->header);
 
-    dmod_write(ctx, dmod_file_out.c_str());
+    dmod_write(ctx, param.dmod_file_out.c_str());
 
     dmod_ctx_free(ctx);
 
-    println("Done");
+    if (param.verbose)
+        println("Done");
 
     return 0;
 }
