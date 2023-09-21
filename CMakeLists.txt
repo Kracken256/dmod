@@ -7,6 +7,8 @@ file(GLOB_RECURSE SOURCES source/*.cpp)
 
 add_library(dmod STATIC ${SOURCES})
 
+target_include_directories(dmod PUBLIC include)
+
 target_compile_options(dmod PRIVATE -static)
 
 target_link_libraries(dmod PRIVATE libz.a)
