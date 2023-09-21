@@ -18,7 +18,7 @@ $(BUILD_DIR)/libdmod.a: $(OBJECTS)
 $(BUILD_DIR)/dmod: $(BUILD_DIR)/libdmod.a dmod-ng.cpp
 	@mkdir -p $(@D)
 	@echo "Building tool $@"
-	@$(CC) dmod-ng.cpp build/libdmod.a -o $@ $(CXXFLAGS) -s -lcrypto -lc -static-libgcc -static-libstdc++
+	@$(CC) dmod-ng.cpp build/libdmod.a -o $@ $(CXXFLAGS) -s -lcrypto -lc -static-libgcc -static-libstdc++ 
 
 $(OBJDIR)/%.obj: source/%.cpp
 	@mkdir -p $(@D)
