@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdmod.a CMakeFiles/dmod.dir/source/dmod.cpp.o
+/usr/bin/ranlib libdmod.a

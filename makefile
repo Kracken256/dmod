@@ -15,8 +15,6 @@ $(BUILD_DIR)/libdmod.a: $(OBJECTS)
 	cd $(OBJDIR) && ar -qc libdmod.a *.obj *.o
 	mv $(OBJDIR)/libdmod.a $(BUILD_DIR)/libdmod.a
 
-
-
 $(BUILD_DIR)/dmod: $(BUILD_DIR)/libdmod.a dmod-ng.cpp
 	@mkdir -p $(@D)
 	@echo "Building tool $@"
